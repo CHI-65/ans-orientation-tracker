@@ -5,7 +5,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.6';
+  const APP_VERSION = '1.7';
   const STORAGE_KEY = 'ans-orientation-tracker:v1';
   const TZ = 'America/Los_Angeles';
   const RANGE = 3; // axes -3..+3
@@ -188,6 +188,8 @@
   const viewTime = $('#view-time');
   const sliderThreat = $('#slider-threat');
   const sliderBand = $('#slider-band');
+  const bandLabelsOptimal = $('#band-labels-optimal');
+  const bandLabelsDefensive = $('#band-labels-defensive');
   const toastEl = $('#toast');
   const appVersionEl = $('#app-version');
   if (appVersionEl) appVersionEl.textContent = `v${APP_VERSION}`;
@@ -351,10 +353,20 @@
   }
 
   // ——— Sliders ↔ draft position ———
+  /** Cross-fade horizontal band zone titles with Sense of threat (chart Y −3…+3). */
+  function updateBandLabelOpacity(y) {
+    const yy = Number(y);
+    const optimalOpacity = yy > 0 ? clamp01(yy / RANGE) : 0;
+    const defensiveOpacity = yy < 0 ? clamp01(-yy / RANGE) : 0;
+    if (bandLabelsOptimal) bandLabelsOptimal.style.opacity = String(optimalOpacity);
+    if (bandLabelsDefensive) bandLabelsDefensive.style.opacity = String(defensiveOpacity);
+  }
+
   function syncSlidersFromDraft() {
     if (!draftXY) return;
     sliderThreat.value = String(draftXY.y);
     sliderBand.value = String(draftXY.x);
+    updateBandLabelOpacity(draftXY.y);
   }
 
   function updateModalSub() {
@@ -372,6 +384,7 @@
     // Keep slider values snapped
     sliderThreat.value = String(y);
     sliderBand.value = String(x);
+    updateBandLabelOpacity(y);
     updateModalSub();
     livePreviewPosition();
   }

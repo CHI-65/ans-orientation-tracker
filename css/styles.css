@@ -1018,19 +1018,59 @@ footer.credits {
 }
 
 .band-labels {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  margin-bottom: 4px;
+  position: relative;
+  min-height: 2.55em;
+  margin-bottom: 6px;
 }
 
-.band-labels span:nth-child(1) { text-align: left; }
-.band-labels span:nth-child(2) { text-align: center; }
-.band-labels span:nth-child(3) { text-align: right; }
+.band-label-layer {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 2px 6px;
+  width: 100%;
+  align-items: start;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s linear;
+}
+
+.band-labels-defensive {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+}
+
+.band-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.band-col-l { text-align: left; align-items: flex-start; }
+.band-col-c { text-align: center; align-items: center; }
+.band-col-r { text-align: right; align-items: flex-end; }
+
+.band-name {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.band-mood {
+  font-size: 0.62rem;
+  font-weight: 500;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.band-labels-optimal .band-name { color: #6b5500; }
+.band-labels-optimal .band-mood { color: #8a6d00; }
+.band-labels-defensive .band-name { color: var(--red); }
+.band-labels-defensive .band-mood { color: #a33a4c; }
 
 .slider-band {
   -webkit-appearance: none;
@@ -1121,6 +1161,11 @@ footer.credits {
   opacity: 0.9;
 }
 
+@media (max-width: 520px) and (min-width: 421px) {
+  .band-name { font-size: 0.62rem; }
+  .band-mood { font-size: 0.58rem; }
+}
+
 @media (max-width: 420px) {
   .placement {
     grid-template-columns: 1fr;
@@ -1160,4 +1205,8 @@ footer.credits {
   .threat-cap.optimal { order: 3; }
   .threat-cap.defensive { order: 1; }
   .slider-threat { order: 2; }
+
+  .band-labels { min-height: 2.1em; }
+  .band-name { font-size: 0.6rem; }
+  .band-mood { display: none; }
 }
