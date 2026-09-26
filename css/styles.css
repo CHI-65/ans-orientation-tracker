@@ -382,6 +382,10 @@ button {
   -webkit-user-select: none;
 }
 
+.grid-stage.marker-moving {
+  touch-action: none;
+}
+
 /* Grid lines */
 .grid-stage .lines {
   position: absolute;
@@ -472,7 +476,7 @@ button {
   align-items: center;
   gap: 3px;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
   z-index: 4;
   border: none;
   background: transparent;
@@ -509,6 +513,20 @@ button {
 .marker:focus-visible .dot {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.marker.moving {
+  z-index: 20;
+  cursor: grabbing;
+}
+
+.marker.moving .dot {
+  transform: scale(1.45);
+  box-shadow: 0 0 0 5px rgba(140, 20, 40, 0.28), 0 3px 10px rgba(0,0,0,0.42);
+}
+
+.marker.moving .num {
+  box-shadow: 0 2px 7px rgba(0,0,0,0.35);
 }
 
 .marker.active .dot {
@@ -737,6 +755,18 @@ button {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.app-version {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 700;
 }
 
 .toast {

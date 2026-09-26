@@ -8,6 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="ANS Tracker" />
   <meta name="description" content="ANS Orientation tracker — daily autonomic nervous system grid for Cal Harris Jr." />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png" />
   <link rel="icon" type="image/png" sizes="16x16" href="icons/icon-16.png" />
@@ -47,7 +48,7 @@
     </div>
 
     <section class="grid-card" aria-label="ANS Orientation grid">
-      <p class="grid-hint">Long-press an empty spot to place a numbered marker · tap a marker to view or edit</p>
+      <p class="grid-hint">Long-press empty = new marker · tap marker = edit · long-press marker = move</p>
 
       <div class="grid-wrap">
         <div class="x-labels-top" id="x-labels-top" aria-hidden="true"></div>
@@ -114,7 +115,7 @@
       <div class="empty-state" id="empty-state">No markers yet. Long-press the grid to begin.</div>
     </section>
 
-    <footer class="credits">Data stays on this device · America/Los_Angeles · Offline-ready PWA</footer>
+    <footer class="credits">Data stays on this device · America/Los_Angeles · Offline-ready PWA · <span class="app-version" id="app-version">v—</span></footer>
   </div>
 
   <!-- Note modal -->

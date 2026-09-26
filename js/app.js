@@ -5,6 +5,7 @@
 (() => {
   'use strict';
 
+  const APP_VERSION = '1.5';
   const STORAGE_KEY = 'ans-orientation-tracker:v1';
   const TZ = 'America/Los_Angeles';
   const RANGE = 3; // axes -3..+3
@@ -110,18 +111,33 @@
   }
 
   // ——— Coordinate mapping ———
-  /** Client point → grid coords (-3..+3), snapped lightly to 0.05 */
-  function pointToXY(gridEl, clientX, clientY) {
+  function clamp01(value) {
+    return Math.max(0, Math.min(1, value));
+  }
+
+  /** Client point → normalized plot position (0..1, left→right/top→bottom). */
+  function pointToNormalized(gridEl, clientX, clientY) {
     const rect = gridEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    const nx = (clientX - rect.left) / rect.width;  // 0..1 left→right
-    const ny = (clientY - rect.top) / rect.height;  // 0..1 top→bottom
-    let x = nx * (RANGE * 2) - RANGE;
-    let y = RANGE - ny * (RANGE * 2);
-    x = Math.max(-RANGE, Math.min(RANGE, x));
-    y = Math.max(-RANGE, Math.min(RANGE, y));
+    return {
+      x: clamp01((clientX - rect.left) / rect.width),
+      y: clamp01((clientY - rect.top) / rect.height)
+    };
+  }
+
+  /** Normalized plot position → grid coords (-3..+3), snapped lightly to 0.05. */
+  function normalizedToXY(position) {
     const snap = (v) => Math.round(v * 20) / 20;
-    return { x: snap(x), y: snap(y) };
+    return {
+      x: snap(position.x * (RANGE * 2) - RANGE),
+      y: snap(RANGE - position.y * (RANGE * 2))
+    };
+  }
+
+  /** Client point → grid coords (-3..+3), clamped to the plot bounds. */
+  function pointToXY(gridEl, clientX, clientY) {
+    const position = pointToNormalized(gridEl, clientX, clientY);
+    return position ? normalizedToXY(position) : null;
   }
 
   function xyToPercent(x, y) {
@@ -144,6 +160,10 @@
   const LONG_PRESS_MOVE_TOLERANCE = 10;
   let gridPress = null;
   let gridPressTimer = null;
+  let markerPress = null;
+  let markerPressTimer = null;
+  let movingMarker = null;
+  let skipMarkerClickId = null;
 
   // ——— DOM ———
   const grid = $('#grid');
@@ -164,6 +184,8 @@
   const actionsView = $('#actions-view');
   const actionsEdit = $('#actions-edit');
   const toastEl = $('#toast');
+  const appVersionEl = $('#app-version');
+  if (appVersionEl) appVersionEl.textContent = `v${APP_VERSION}`;
 
   // Build axis labels & grid lines once
   function buildChrome() {
@@ -221,6 +243,10 @@
     return ms.length ? Math.max(...ms.map((m) => m.n)) + 1 : 1;
   }
 
+  function markerById(id) {
+    return getDayMarkers(store, currentDay).find((m) => m.id === id) || null;
+  }
+
   function renderMarkers() {
     const ms = markersForDay();
     markersEl.innerHTML = '';
@@ -229,14 +255,24 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'marker' + (activeMarker && activeMarker.id === m.id ? ' active' : '');
+      if (movingMarker && movingMarker.id === m.id) btn.classList.add('moving');
       btn.style.left = left + '%';
       btn.style.top = top + '%';
       btn.dataset.id = m.id;
       btn.setAttribute('aria-label', `Marker ${m.n} at ${fmtXY(m.x, m.y)}`);
       btn.innerHTML = `<span class="dot" aria-hidden="true"></span><span class="num">${m.n}</span>`;
+      btn.addEventListener('pointerdown', (e) => onMarkerPointerDown(e, m));
+      btn.addEventListener('pointermove', onMarkerPointerMove);
+      btn.addEventListener('pointerup', onMarkerPointerUp);
+      btn.addEventListener('pointercancel', onMarkerPointerCancel);
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        openView(m);
+        if (skipMarkerClickId === m.id) {
+          skipMarkerClickId = null;
+          return;
+        }
+        if (movingMarker) return;
+        openMarkerEdit(m);
       });
       markersEl.appendChild(btn);
     });
@@ -329,6 +365,11 @@
     openModal();
     setTimeout(() => noteInput.focus(), 50);
     renderMarkers();
+  }
+
+  function openMarkerEdit(m) {
+    openView(m);
+    openEdit();
   }
 
   function openView(m) {
@@ -432,8 +473,129 @@
     gridPress = null;
   }
 
+  function clearMarkerPressTimer() {
+    if (markerPressTimer !== null) {
+      clearTimeout(markerPressTimer);
+      markerPressTimer = null;
+    }
+  }
+
+  function setMarkerPositionPreview(id, xy) {
+    const btn = [...markersEl.querySelectorAll('.marker')].find((el) => el.dataset.id === id);
+    if (!btn) return;
+    const { left, top } = xyToPercent(xy.x, xy.y);
+    btn.style.left = left + '%';
+    btn.style.top = top + '%';
+    btn.setAttribute('aria-label', `Marker ${markerById(id)?.n || ''} at ${fmtXY(xy.x, xy.y)}`);
+  }
+
+  function persistMarkerPosition(id, xy) {
+    const current = markerById(id);
+    if (!current || !xy) return;
+    if (current.x === xy.x && current.y === xy.y) {
+      renderMarkers();
+      return;
+    }
+    const list = getDayMarkers(store, currentDay).map((m) =>
+      m.id === id ? { ...m, x: xy.x, y: xy.y, updatedAt: nowISO() } : m
+    );
+    setDayMarkers(store, currentDay, list);
+    store = loadStore();
+    const updated = markerById(id);
+    if (activeMarker && activeMarker.id === id) activeMarker = updated;
+    renderMarkers();
+    toast(`Moved marker #${updated ? updated.n : current.n}`);
+  }
+
+  function endMarkerDrag(savePosition) {
+    const moving = movingMarker;
+    const state = markerPress;
+    clearMarkerPressTimer();
+    markerPress = null;
+    movingMarker = null;
+    grid.classList.remove('marker-moving');
+    if (state && state.element && state.element.hasPointerCapture?.(state.pointerId)) {
+      try { state.element.releasePointerCapture(state.pointerId); } catch { /* already released */ }
+    }
+    if (moving && savePosition) persistMarkerPosition(moving.id, moving.lastXY);
+    else renderMarkers();
+  }
+
+  function startMarkerDrag() {
+    if (!markerPress || markerPress.moved) return;
+    const state = markerPress;
+    const marker = markerById(state.id);
+    if (!marker) return;
+    markerPressTimer = null;
+    state.dragging = true;
+    movingMarker = { id: marker.id, lastXY: { x: marker.x, y: marker.y } };
+    activeMarker = marker;
+    grid.classList.add('marker-moving');
+    state.element.classList.add('moving');
+    try { state.element.setPointerCapture(state.pointerId); } catch { /* unsupported */ }
+  }
+
+  function onMarkerPointerDown(e, marker) {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.stopPropagation();
+    clearGridPress();
+    clearMarkerPressTimer();
+    markerPress = {
+      pointerId: e.pointerId,
+      id: marker.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      element: e.currentTarget,
+      dragging: false,
+      moved: false
+    };
+    markerPressTimer = setTimeout(startMarkerDrag, LONG_PRESS_MS);
+  }
+
+  function onMarkerPointerMove(e) {
+    if (!markerPress || markerPress.pointerId !== e.pointerId) return;
+    const state = markerPress;
+    const moved = Math.hypot(e.clientX - state.startX, e.clientY - state.startY);
+    if (!state.dragging && moved > LONG_PRESS_MOVE_TOLERANCE) {
+      state.moved = true;
+      clearMarkerPressTimer();
+      skipMarkerClickId = state.id;
+      return;
+    }
+    if (!state.dragging || !movingMarker) return;
+    const xy = pointToXY(grid, e.clientX, e.clientY);
+    if (!xy) return;
+    e.preventDefault();
+    movingMarker.lastXY = xy;
+    setMarkerPositionPreview(state.id, xy);
+  }
+
+  function onMarkerPointerUp(e) {
+    if (!markerPress || markerPress.pointerId !== e.pointerId) return;
+    e.stopPropagation();
+    const state = markerPress;
+    if (state.dragging) {
+      const xy = pointToXY(grid, e.clientX, e.clientY);
+      if (xy && movingMarker) movingMarker.lastXY = xy;
+      e.preventDefault();
+      endMarkerDrag(true);
+      return;
+    }
+    clearMarkerPressTimer();
+    markerPress = null;
+    if (state.moved) skipMarkerClickId = state.id;
+  }
+
+  function onMarkerPointerCancel(e) {
+    if (!markerPress || markerPress.pointerId !== e.pointerId) return;
+    e.stopPropagation();
+    const wasDragging = markerPress.dragging;
+    endMarkerDrag(wasDragging);
+    if (!wasDragging) skipMarkerClickId = null;
+  }
+
   function onGridPointerDown(e) {
-    // Markers handle their own short taps; never start placement on top of one.
+    // Markers handle their own taps and long-press moves.
     if (e.target.closest('.marker')) return;
     if (e.button !== undefined && e.button !== 0) return;
 
@@ -580,24 +742,12 @@
     // Only register when served over http(s) — file:// won't work
     if (!/^https?:$/.test(location.protocol)) return;
 
-    const reloadKey = 'ans-orientation-sw-reloaded';
+    // skipWaiting() + clients.claim() in sw.js makes updates take control now;
+    // reload once for the new cached HTML/JS/CSS to become visible.
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloading) return;
-      let alreadyReloaded = false;
-      try {
-        alreadyReloaded = sessionStorage.getItem(reloadKey) === '1';
-      } catch {
-        // Ignore storage restrictions; the in-memory guard still prevents loops.
-      }
-      if (alreadyReloaded) return;
-
       reloading = true;
-      try {
-        sessionStorage.setItem(reloadKey, '1');
-      } catch {
-        // Ignore storage restrictions.
-      }
       toast('Updated — refreshing');
       setTimeout(() => window.location.reload(), 150);
     });
