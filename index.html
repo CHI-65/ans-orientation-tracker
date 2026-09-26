@@ -48,7 +48,7 @@
     </div>
 
     <section class="grid-card" aria-label="ANS Orientation grid">
-      <p class="grid-hint">Long-press empty = new marker · tap marker = edit · long-press marker = move</p>
+      <p class="grid-hint">Long-press empty = new · tap marker = edit · long-press marker = move · sliders in edit move place</p>
 
       <div class="grid-wrap">
         <div class="x-labels-top" id="x-labels-top" aria-hidden="true"></div>
@@ -118,18 +118,14 @@
     <footer class="credits">Data stays on this device · America/Los_Angeles · Offline-ready PWA · <span class="app-version" id="app-version">v—</span></footer>
   </div>
 
-  <!-- Note modal -->
+  <!-- Edit / create modal -->
   <div class="modal-backdrop" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
     <div class="modal">
+      <button type="button" class="modal-close" id="btn-modal-close" aria-label="Close without saving">×</button>
       <h3 id="modal-title">Marker note</h3>
       <p class="sub" id="modal-sub"></p>
 
-      <div class="field" id="field-view" hidden>
-        <label>Note</label>
-        <div class="readonly" id="view-note"></div>
-      </div>
-
-      <div class="field" id="field-edit">
+      <div class="field">
         <label for="note-input">Note</label>
         <textarea id="note-input" placeholder="How are you feeling? What’s happening around you?" maxlength="4000"></textarea>
       </div>
@@ -139,20 +135,53 @@
         <div class="readonly" id="view-time" style="min-height:auto"></div>
       </div>
 
-      <div class="modal-actions" id="actions-create">
-        <button type="button" class="btn btn-ghost" id="btn-cancel">Cancel</button>
-        <button type="button" class="btn btn-primary" id="btn-save">Save marker</button>
+      <div class="placement">
+        <div class="field placement-threat">
+          <label for="slider-threat">Sense of threat</label>
+          <div class="threat-slider-row">
+            <span class="threat-cap optimal" aria-hidden="true">Optimal</span>
+            <input
+              type="range"
+              id="slider-threat"
+              class="slider-threat"
+              min="-3"
+              max="3"
+              step="0.05"
+              value="0"
+              aria-valuemin="-3"
+              aria-valuemax="3"
+              aria-label="Sense of threat: defensive (min) to optimal (max)"
+            />
+            <span class="threat-cap defensive" aria-hidden="true">Defensive</span>
+          </div>
+        </div>
+
+        <div class="field placement-band">
+          <label for="slider-band">Horizontal band</label>
+          <div class="band-labels" aria-hidden="true">
+            <span>Inner</span>
+            <span>Center</span>
+            <span>Outer</span>
+          </div>
+          <input
+            type="range"
+            id="slider-band"
+            class="slider-band"
+            min="-3"
+            max="3"
+            step="0.05"
+            value="0"
+            aria-valuemin="-3"
+            aria-valuemax="3"
+            aria-label="Horizontal position across left, middle, and right bands"
+          />
+        </div>
       </div>
 
-      <div class="modal-actions" id="actions-view" hidden>
+      <div class="modal-actions" id="actions-main">
         <button type="button" class="btn btn-danger" id="btn-delete">Delete</button>
-        <button type="button" class="btn btn-ghost" id="btn-close">Close</button>
-        <button type="button" class="btn btn-primary" id="btn-edit">Edit</button>
-      </div>
-
-      <div class="modal-actions" id="actions-edit" hidden>
-        <button type="button" class="btn btn-ghost" id="btn-edit-cancel">Cancel</button>
-        <button type="button" class="btn btn-primary" id="btn-edit-save">Save changes</button>
+        <button type="button" class="btn btn-primary" id="btn-save">Save</button>
+        <button type="button" class="btn btn-ghost" id="btn-duplicate">Duplicate</button>
       </div>
     </div>
   </div>

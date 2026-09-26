@@ -5,10 +5,12 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.5';
+  const APP_VERSION = '1.6';
   const STORAGE_KEY = 'ans-orientation-tracker:v1';
   const TZ = 'America/Los_Angeles';
   const RANGE = 3; // axes -3..+3
+  /** Normalized-plot offset (~0.07) → grid-y lift for Duplicate. */
+  const DUP_OFFSET_NORM = 0.07;
 
   /** @typedef {{ id: string, n: number, x: number, y: number, note: string, createdAt: string, updatedAt?: string }} Marker */
   /** @typedef {{ version: number, days: Record<string, Marker[]> }} Store */
@@ -115,6 +117,14 @@
     return Math.max(0, Math.min(1, value));
   }
 
+  function clampRange(value) {
+    return Math.max(-RANGE, Math.min(RANGE, value));
+  }
+
+  function snapCoord(v) {
+    return Math.round(v * 20) / 20;
+  }
+
   /** Client point → normalized plot position (0..1, left→right/top→bottom). */
   function pointToNormalized(gridEl, clientX, clientY) {
     const rect = gridEl.getBoundingClientRect();
@@ -127,10 +137,9 @@
 
   /** Normalized plot position → grid coords (-3..+3), snapped lightly to 0.05. */
   function normalizedToXY(position) {
-    const snap = (v) => Math.round(v * 20) / 20;
     return {
-      x: snap(position.x * (RANGE * 2) - RANGE),
-      y: snap(RANGE - position.y * (RANGE * 2))
+      x: snapCoord(position.x * (RANGE * 2) - RANGE),
+      y: snapCoord(RANGE - position.y * (RANGE * 2))
     };
   }
 
@@ -149,12 +158,12 @@
   // ——— State ———
   let store = loadStore();
   let currentDay = dayKeyFromDate();
-  /** @type {'create'|'view'|'edit'|null} */
+  /** @type {'create'|'edit'|null} */
   let modalMode = null;
   /** @type {Marker|null} */
   let activeMarker = null;
-  /** Pending create coords */
-  let pendingXY = null;
+  /** Draft x/y while modal is open (create or edit). */
+  let draftXY = null;
 
   const LONG_PRESS_MS = 500;
   const LONG_PRESS_MOVE_TOLERANCE = 10;
@@ -176,13 +185,9 @@
   const modalTitle = $('#modal-title');
   const modalSub = $('#modal-sub');
   const noteInput = $('#note-input');
-  const viewNote = $('#view-note');
   const viewTime = $('#view-time');
-  const fieldView = $('#field-view');
-  const fieldEdit = $('#field-edit');
-  const actionsCreate = $('#actions-create');
-  const actionsView = $('#actions-view');
-  const actionsEdit = $('#actions-edit');
+  const sliderThreat = $('#slider-threat');
+  const sliderBand = $('#slider-band');
   const toastEl = $('#toast');
   const appVersionEl = $('#app-version');
   if (appVersionEl) appVersionEl.textContent = `v${APP_VERSION}`;
@@ -251,7 +256,11 @@
     const ms = markersForDay();
     markersEl.innerHTML = '';
     ms.forEach((m) => {
-      const { left, top } = xyToPercent(m.x, m.y);
+      const pos =
+        draftXY && activeMarker && activeMarker.id === m.id
+          ? draftXY
+          : { x: m.x, y: m.y };
+      const { left, top } = xyToPercent(pos.x, pos.y);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'marker' + (activeMarker && activeMarker.id === m.id ? ' active' : '');
@@ -259,7 +268,7 @@
       btn.style.left = left + '%';
       btn.style.top = top + '%';
       btn.dataset.id = m.id;
-      btn.setAttribute('aria-label', `Marker ${m.n} at ${fmtXY(m.x, m.y)}`);
+      btn.setAttribute('aria-label', `Marker ${m.n} at ${fmtXY(pos.x, pos.y)}`);
       btn.innerHTML = `<span class="dot" aria-hidden="true"></span><span class="num">${m.n}</span>`;
       btn.addEventListener('pointerdown', (e) => onMarkerPointerDown(e, m));
       btn.addEventListener('pointermove', onMarkerPointerMove);
@@ -272,10 +281,23 @@
           return;
         }
         if (movingMarker) return;
-        openMarkerEdit(m);
+        openEdit(m);
       });
       markersEl.appendChild(btn);
     });
+
+    // Create-flow preview (unsaved)
+    if (modalMode === 'create' && draftXY) {
+      const { left, top } = xyToPercent(draftXY.x, draftXY.y);
+      const preview = document.createElement('div');
+      preview.className = 'marker preview';
+      preview.style.left = left + '%';
+      preview.style.top = top + '%';
+      preview.setAttribute('aria-hidden', 'true');
+      const n = nextNumber();
+      preview.innerHTML = `<span class="dot"></span><span class="num">${n}</span>`;
+      markersEl.appendChild(preview);
+    }
 
     // List
     markerList.innerHTML = '';
@@ -293,7 +315,7 @@
             <div class="note-preview">${escapeHtml(m.note || '(no note)')}</div>
           </div>
           <div class="time">${escapeHtml(formatFriendly(m.createdAt))}</div>`;
-        li.addEventListener('click', () => openView(m));
+        li.addEventListener('click', () => openEdit(m));
         markerList.appendChild(li);
       });
     }
@@ -328,123 +350,71 @@
       .replace(/"/g, '&quot;');
   }
 
-  // ——— Modal ———
-  function setActions(mode) {
-    actionsCreate.hidden = mode !== 'create';
-    actionsView.hidden = mode !== 'view';
-    actionsEdit.hidden = mode !== 'edit';
-    fieldView.hidden = mode !== 'view';
-    fieldEdit.hidden = mode === 'view';
+  // ——— Sliders ↔ draft position ———
+  function syncSlidersFromDraft() {
+    if (!draftXY) return;
+    sliderThreat.value = String(draftXY.y);
+    sliderBand.value = String(draftXY.x);
   }
 
+  function updateModalSub() {
+    if (!draftXY) {
+      modalSub.textContent = '';
+      return;
+    }
+    modalSub.textContent = `${fmtXY(draftXY.x, draftXY.y)} · ${zoneLabel(draftXY.x, draftXY.y)}`;
+  }
+
+  function applyDraftFromSliders() {
+    const y = snapCoord(clampRange(Number(sliderThreat.value)));
+    const x = snapCoord(clampRange(Number(sliderBand.value)));
+    draftXY = { x, y };
+    // Keep slider values snapped
+    sliderThreat.value = String(y);
+    sliderBand.value = String(x);
+    updateModalSub();
+    livePreviewPosition();
+  }
+
+  function livePreviewPosition() {
+    if (!draftXY) return;
+    if (modalMode === 'edit' && activeMarker) {
+      setMarkerPositionPreview(activeMarker.id, draftXY);
+      const btn = [...markersEl.querySelectorAll('.marker')].find(
+        (el) => el.dataset.id === activeMarker.id
+      );
+      if (btn) {
+        btn.setAttribute(
+          'aria-label',
+          `Marker ${activeMarker.n} at ${fmtXY(draftXY.x, draftXY.y)}`
+        );
+      }
+    } else if (modalMode === 'create') {
+      // Re-render to move/create the preview ghost
+      const preview = markersEl.querySelector('.marker.preview');
+      if (preview) {
+        const { left, top } = xyToPercent(draftXY.x, draftXY.y);
+        preview.style.left = left + '%';
+        preview.style.top = top + '%';
+      } else {
+        renderMarkers();
+      }
+    }
+  }
+
+  // ——— Modal ———
   function openModal() {
     modal.hidden = false;
     requestAnimationFrame(() => modal.classList.add('open'));
   }
 
-  function closeModal() {
+  function dismissModal() {
+    // X / Escape / backdrop: discard draft; do not save
     modal.classList.remove('open');
-    setTimeout(() => {
-      modal.hidden = true;
-      modalMode = null;
-      pendingXY = null;
-      activeMarker = null;
-      renderMarkers();
-    }, 180);
-  }
-
-  function openCreate(x, y) {
-    modalMode = 'create';
-    pendingXY = { x, y };
+    modal.hidden = true;
+    modalMode = null;
+    draftXY = null;
     activeMarker = null;
-    modalTitle.textContent = `New marker #${nextNumber()}`;
-    modalSub.textContent = `${fmtXY(x, y)} · ${zoneLabel(x, y)}`;
-    noteInput.value = '';
-    viewTime.textContent = formatFriendly(nowISO()) + ' (will save on confirm)';
-    setActions('create');
-    openModal();
-    setTimeout(() => noteInput.focus(), 50);
-    renderMarkers();
-  }
-
-  function openMarkerEdit(m) {
-    openView(m);
-    openEdit();
-  }
-
-  function openView(m) {
-    modalMode = 'view';
-    activeMarker = m;
-    pendingXY = null;
-    modalTitle.textContent = `Marker #${m.n}`;
-    modalSub.textContent = `${fmtXY(m.x, m.y)} · ${zoneLabel(m.x, m.y)}`;
-    viewNote.textContent = m.note || '(no note)';
-    let timeText = formatFriendly(m.createdAt);
-    if (m.updatedAt && m.updatedAt !== m.createdAt) {
-      timeText += `\nEdited ${formatFriendly(m.updatedAt)}`;
-    }
-    viewTime.textContent = timeText;
-    setActions('view');
-    openModal();
-    renderMarkers();
-  }
-
-  function openEdit() {
-    if (!activeMarker) return;
-    modalMode = 'edit';
-    modalTitle.textContent = `Edit marker #${activeMarker.n}`;
-    noteInput.value = activeMarker.note || '';
-    viewTime.textContent = formatFriendly(activeMarker.createdAt);
-    setActions('edit');
-    setTimeout(() => noteInput.focus(), 50);
-  }
-
-  function saveCreate() {
-    if (!pendingXY) return;
-    const m = {
-      id: uid(),
-      n: nextNumber(),
-      x: pendingXY.x,
-      y: pendingXY.y,
-      note: noteInput.value.trim(),
-      createdAt: nowISO()
-    };
-    const list = markersForDay().concat(m);
-    setDayMarkers(store, currentDay, list);
-    store = loadStore();
-    activeMarker = m;
-    toast(`Saved marker #${m.n}`);
-    closeModalQuick();
-    openView(m);
-  }
-
-  function saveEdit() {
-    if (!activeMarker) return;
-    const list = markersForDay().map((m) => {
-      if (m.id !== activeMarker.id) return m;
-      return {
-        ...m,
-        note: noteInput.value.trim(),
-        updatedAt: nowISO()
-      };
-    });
-    setDayMarkers(store, currentDay, list);
-    store = loadStore();
-    const updated = getDayMarkers(store, currentDay).find((m) => m.id === activeMarker.id);
-    toast('Note updated');
-    if (updated) openView(updated);
-    else closeModalQuick();
-  }
-
-  function deleteActive() {
-    if (!activeMarker) return;
-    if (!confirm(`Delete marker #${activeMarker.n}?`)) return;
-    const list = markersForDay().filter((m) => m.id !== activeMarker.id);
-    setDayMarkers(store, currentDay, list);
-    store = loadStore();
-    toast(`Deleted marker #${activeMarker.n}`);
-    activeMarker = null;
-    closeModalQuick();
     renderMarkers();
   }
 
@@ -452,7 +422,136 @@
     modal.classList.remove('open');
     modal.hidden = true;
     modalMode = null;
-    pendingXY = null;
+    draftXY = null;
+  }
+
+  function openCreate(x, y) {
+    modalMode = 'create';
+    activeMarker = null;
+    draftXY = { x: snapCoord(x), y: snapCoord(y) };
+    modalTitle.textContent = `New marker #${nextNumber()}`;
+    noteInput.value = '';
+    viewTime.textContent = formatFriendly(nowISO()) + ' (will save on confirm)';
+    syncSlidersFromDraft();
+    updateModalSub();
+    openModal();
+    renderMarkers();
+    setTimeout(() => noteInput.focus(), 50);
+  }
+
+  function openEdit(m) {
+    modalMode = 'edit';
+    activeMarker = m;
+    draftXY = { x: m.x, y: m.y };
+    modalTitle.textContent = `Edit marker #${m.n}`;
+    noteInput.value = m.note || '';
+    let timeText = formatFriendly(m.createdAt);
+    if (m.updatedAt && m.updatedAt !== m.createdAt) {
+      timeText += `\nEdited ${formatFriendly(m.updatedAt)}`;
+    }
+    viewTime.textContent = timeText;
+    syncSlidersFromDraft();
+    updateModalSub();
+    openModal();
+    renderMarkers();
+    setTimeout(() => noteInput.focus(), 50);
+  }
+
+  function persistMarker(marker) {
+    const list = markersForDay();
+    const idx = list.findIndex((m) => m.id === marker.id);
+    let next;
+    if (idx === -1) {
+      next = list.concat(marker);
+    } else {
+      next = list.slice();
+      next[idx] = marker;
+    }
+    setDayMarkers(store, currentDay, next);
+    store = loadStore();
+    return markerById(marker.id);
+  }
+
+  function saveCurrent() {
+    if (!draftXY) return null;
+    const note = noteInput.value.trim();
+    if (modalMode === 'create') {
+      const m = {
+        id: uid(),
+        n: nextNumber(),
+        x: draftXY.x,
+        y: draftXY.y,
+        note,
+        createdAt: nowISO()
+      };
+      const saved = persistMarker(m);
+      toast(`Saved marker #${saved.n}`);
+      return saved;
+    }
+    if (modalMode === 'edit' && activeMarker) {
+      const updated = persistMarker({
+        ...activeMarker,
+        x: draftXY.x,
+        y: draftXY.y,
+        note,
+        updatedAt: nowISO()
+      });
+      toast(`Saved marker #${updated.n}`);
+      return updated;
+    }
+    return null;
+  }
+
+  function onSave() {
+    const saved = saveCurrent();
+    if (!saved) return;
+    closeModalQuick();
+    activeMarker = null;
+    renderMarkers();
+  }
+
+  function onDelete() {
+    if (modalMode === 'create') {
+      // Unsaved create: discard
+      dismissModal();
+      toast('Discarded');
+      return;
+    }
+    if (!activeMarker) return;
+    if (!confirm(`Delete marker #${activeMarker.n}?`)) return;
+    const n = activeMarker.n;
+    const list = markersForDay().filter((m) => m.id !== activeMarker.id);
+    setDayMarkers(store, currentDay, list);
+    store = loadStore();
+    toast(`Deleted marker #${n}`);
+    closeModalQuick();
+    activeMarker = null;
+    renderMarkers();
+  }
+
+  function duplicateYAbove(y) {
+    const lift = DUP_OFFSET_NORM * (RANGE * 2); // ≈ 0.42
+    return snapCoord(Math.min(RANGE, y + lift));
+  }
+
+  function onDuplicate() {
+    if (!draftXY) return;
+    // Ensure the current marker exists (save create/edit draft first)
+    const source = saveCurrent();
+    if (!source) return;
+
+    const dup = {
+      id: uid(),
+      n: nextNumber(),
+      x: source.x,
+      y: duplicateYAbove(source.y),
+      note: source.note || '',
+      createdAt: nowISO()
+    };
+    const saved = persistMarker(dup);
+    toast(`Duplicated → #${saved.n}`);
+    // Stay in edit on the new duplicate
+    openEdit(saved);
   }
 
   // ——— Day switcher ———
@@ -460,6 +559,7 @@
     currentDay = key;
     dayPicker.value = key;
     activeMarker = null;
+    draftXY = null;
     closeModalQuick();
     renderMarkers();
   }
@@ -502,7 +602,12 @@
     setDayMarkers(store, currentDay, list);
     store = loadStore();
     const updated = markerById(id);
-    if (activeMarker && activeMarker.id === id) activeMarker = updated;
+    if (activeMarker && activeMarker.id === id) {
+      activeMarker = updated;
+      draftXY = { x: updated.x, y: updated.y };
+      syncSlidersFromDraft();
+      updateModalSub();
+    }
     renderMarkers();
     toast(`Moved marker #${updated ? updated.n : current.n}`);
   }
@@ -652,7 +757,6 @@
         if (!data || typeof data !== 'object' || !data.days || typeof data.days !== 'object') {
           throw new Error('Invalid file: missing days');
         }
-        // Merge days (imported markers replace same-day data only if confirmed)
         const incoming = data.days;
         const keys = Object.keys(incoming);
         if (!keys.length) {
@@ -693,38 +797,20 @@
       if (dayPicker.value) setDay(dayPicker.value);
     });
 
-    $('#btn-cancel').addEventListener('click', () => {
-      closeModalQuick();
-      activeMarker = null;
-      renderMarkers();
-    });
-    $('#btn-save').addEventListener('click', saveCreate);
-    $('#btn-close').addEventListener('click', () => {
-      closeModalQuick();
-      activeMarker = null;
-      renderMarkers();
-    });
-    $('#btn-edit').addEventListener('click', openEdit);
-    $('#btn-edit-cancel').addEventListener('click', () => {
-      if (activeMarker) openView(activeMarker);
-    });
-    $('#btn-edit-save').addEventListener('click', saveEdit);
-    $('#btn-delete').addEventListener('click', deleteActive);
+    $('#btn-modal-close').addEventListener('click', dismissModal);
+    $('#btn-save').addEventListener('click', onSave);
+    $('#btn-delete').addEventListener('click', onDelete);
+    $('#btn-duplicate').addEventListener('click', onDuplicate);
+
+    sliderThreat.addEventListener('input', applyDraftFromSliders);
+    sliderBand.addEventListener('input', applyDraftFromSliders);
 
     modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
-        closeModalQuick();
-        activeMarker = null;
-        renderMarkers();
-      }
+      if (e.target === modal) dismissModal();
     });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !modal.hidden) {
-        closeModalQuick();
-        activeMarker = null;
-        renderMarkers();
-      }
+      if (e.key === 'Escape' && !modal.hidden) dismissModal();
     });
 
     $('#btn-export').addEventListener('click', exportJSON);
