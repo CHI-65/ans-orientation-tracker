@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#8c1428" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="ANS Tracker" />
+  <meta name="description" content="ANS Orientation tracker — daily autonomic nervous system grid for Cal Harris Jr." />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/icon-16.png" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <title>ANS Orientation Tracker</title>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <h1>ANS Orientation</h1>
+          <p>Daily tracker · Cal Harris Jr.</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="btn btn-ghost" id="btn-export" title="Export JSON">
+          ⬆ <span class="label">Export</span>
+        </button>
+        <button type="button" class="btn btn-ghost" id="btn-import" title="Import JSON">
+          ⬇ <span class="label">Import</span>
+        </button>
+        <input type="file" id="import-file" accept="application/json,.json" class="sr-only" />
+      </div>
+    </header>
+
+    <div class="day-bar" role="group" aria-label="Day switcher">
+      <button type="button" class="day-nav" id="btn-prev" aria-label="Previous day">‹</button>
+      <div class="day-center">
+        <div class="day-label">Selected day</div>
+        <input type="date" class="day-date" id="day-picker" aria-label="Pick a date" />
+        <div class="day-meta" id="day-meta">0 markers</div>
+      </div>
+      <button type="button" class="day-nav" id="btn-next" aria-label="Next day">›</button>
+    </div>
+
+    <section class="grid-card" aria-label="ANS Orientation grid">
+      <p class="grid-hint">Tap an empty spot to place a numbered marker · tap a marker to view or edit</p>
+
+      <div class="grid-wrap">
+        <div class="x-labels-top" id="x-labels-top" aria-hidden="true"></div>
+
+        <aside class="y-labels" aria-hidden="true">
+          <div class="safety">sense of<br />safety</div>
+          <div class="arrow">↑</div>
+          <div class="neutral">neutral</div>
+          <div class="arrow">↓</div>
+          <div class="threat">sense of<br />threat</div>
+        </aside>
+
+        <div class="grid-stage" id="grid" role="application" aria-label="ANS Orientation coordinate grid from -3 to +3">
+          <div class="lines" id="grid-lines" aria-hidden="true"></div>
+          <div class="zone-labels" aria-hidden="true">
+            <div class="zone optimal col-l">
+              <span class="name">Dorsal/Ventral Blend</span>
+              <span class="mood">“Nourished”</span>
+            </div>
+            <div class="zone optimal col-c">
+              <span class="name">Ventral Vagal Dominant</span>
+              <span class="mood">“Connected”</span>
+            </div>
+            <div class="zone optimal col-r">
+              <span class="name">Sympathetic/Ventral Blend</span>
+              <span class="mood">“Energized”</span>
+            </div>
+            <div class="zone defensive col-l">
+              <span class="name">Dorsal Vagal Dominant</span>
+              <span class="mood">“Drained”</span>
+            </div>
+            <div class="zone defensive col-c">
+              <span class="name">Sympathetic/Dorsal Blend</span>
+              <span class="mood">“Stuck”</span>
+            </div>
+            <div class="zone defensive col-r">
+              <span class="name">Sympathetic Dominant</span>
+              <span class="mood">“Agitated”</span>
+            </div>
+          </div>
+          <div class="markers" id="markers"></div>
+        </div>
+
+        <div class="y-ticks" id="y-ticks" aria-hidden="true"></div>
+
+        <div class="x-labels-bot" id="x-labels-bot" aria-hidden="true"></div>
+
+        <div class="axis-footer">
+          <div class="left">← inner functions</div>
+          <div class="center">ANS Orientation</div>
+          <div class="right">outer actions →</div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><i class="swatch optimal" aria-hidden="true"></i> Optimal Zone</span>
+        <span><i class="swatch defensive" aria-hidden="true"></i> Defensive Zone</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Markers today</h2>
+      <ul class="marker-list" id="marker-list"></ul>
+      <div class="empty-state" id="empty-state">No markers yet. Tap the grid to begin.</div>
+    </section>
+
+    <footer class="credits">Data stays on this device · America/Los_Angeles · Offline-ready PWA</footer>
+  </div>
+
+  <!-- Note modal -->
+  <div class="modal-backdrop" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" hidden>
+    <div class="modal">
+      <h3 id="modal-title">Marker note</h3>
+      <p class="sub" id="modal-sub"></p>
+
+      <div class="field" id="field-view" hidden>
+        <label>Note</label>
+        <div class="readonly" id="view-note"></div>
+      </div>
+
+      <div class="field" id="field-edit">
+        <label for="note-input">Note</label>
+        <textarea id="note-input" placeholder="How are you feeling? What’s happening around you?" maxlength="4000"></textarea>
+      </div>
+
+      <div class="field">
+        <label>When</label>
+        <div class="readonly" id="view-time" style="min-height:auto"></div>
+      </div>
+
+      <div class="modal-actions" id="actions-create">
+        <button type="button" class="btn btn-ghost" id="btn-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btn-save">Save marker</button>
+      </div>
+
+      <div class="modal-actions" id="actions-view" hidden>
+        <button type="button" class="btn btn-danger" id="btn-delete">Delete</button>
+        <button type="button" class="btn btn-ghost" id="btn-close">Close</button>
+        <button type="button" class="btn btn-primary" id="btn-edit">Edit</button>
+      </div>
+
+      <div class="modal-actions" id="actions-edit" hidden>
+        <button type="button" class="btn btn-ghost" id="btn-edit-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btn-edit-save">Save changes</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/app.js" defer></script>
+</body>
+</html>
