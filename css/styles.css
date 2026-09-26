@@ -1484,3 +1484,58 @@ footer.credits {
   .band-labels { min-height: 3em; }
   .band-mood { display: none; }
 }
+
+
+/* Text inputs (settings) */
+.text-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 0.9rem;
+}
+.text-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+/* Settings sheet */
+.settings-modal {
+  width: min(100%, 420px);
+}
+.settings-hint {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.settings-hint code {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  word-break: break-all;
+  background: #efeae2;
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.settings-account {
+  margin: 0 0 12px;
+  font-size: 0.9rem;
+  color: var(--ink);
+  word-break: break-word;
+}
+.settings-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.settings-msg {
+  margin: 10px 0 0;
+  min-height: 1.2em;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+footer.credits #sync-status {
+  font-weight: 600;
+}

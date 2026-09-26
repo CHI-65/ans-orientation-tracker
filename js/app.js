@@ -1,20 +1,27 @@
 /**
  * ANS Orientation Tracker — Cal Harris Jr.
- * Per-day markers on a -3..+3 grid, persisted in localStorage.
+ * Per-day markers on a -3..+3 grid; localStorage + optional Google Drive appData sync.
  */
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.8';
+  const APP_VERSION = '1.9';
   const STORAGE_KEY = 'ans-orientation-tracker:v1';
   const VIEW_KEY = 'ans-orientation-tracker:dayView';
+  const GGL_CLIENT_KEY = 'ans_ggl_client_id';
+  const GGL_TOK_KEY = 'ans_ggl_tok';
+  const GGL_FILE_KEY = 'ans_ggl_file_id';
+  const DRIVE_FILE_NAME = 'ans-orientation.json';
+  const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/userinfo.email';
+  const UPLOAD_DEBOUNCE_MS = 800;
+  const DELETE_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
   const TZ = 'America/Los_Angeles';
-  const RANGE = 3; // axes -3..+3
+  const RANGE = 3;
   /** Normalized-plot offset (~0.07) → grid-y lift for Duplicate. */
   const DUP_OFFSET_NORM = 0.07;
 
   /** @typedef {{ id: string, n: number, x: number, y: number, note: string, createdAt: string, updatedAt?: string }} Marker */
-  /** @typedef {{ version: number, days: Record<string, Marker[]> }} Store */
+  /** @typedef {{ version: number, updatedAt?: string, days: Record<string, Marker[]>, deleted?: Record<string, string> }} Store */
 
   const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -35,7 +42,6 @@
 
   function parseDayKey(key) {
     const [y, m, d] = key.split('-').map(Number);
-    // Noon UTC avoids DST edge weirdness when shifting days
     return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
   }
 
@@ -79,20 +85,47 @@
   }
 
   // ——— Persistence ———
+  function emptyStore() {
+    return { version: 1, updatedAt: nowISO(), days: {}, deleted: {} };
+  }
+
+  function normalizeStore(data) {
+    if (!data || typeof data !== 'object') return emptyStore();
+    const days = data.days && typeof data.days === 'object' ? data.days : {};
+    const deleted =
+      data.deleted && typeof data.deleted === 'object' ? { ...data.deleted } : {};
+    const cleanedDays = {};
+    Object.keys(days).forEach((k) => {
+      if (Array.isArray(days[k]) && days[k].length) cleanedDays[k] = days[k];
+    });
+    return {
+      version: 1,
+      updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : nowISO(),
+      days: cleanedDays,
+      deleted
+    };
+  }
+
   function loadStore() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { version: 1, days: {} };
-      const data = JSON.parse(raw);
-      if (!data || typeof data !== 'object') return { version: 1, days: {} };
-      return { version: 1, days: data.days && typeof data.days === 'object' ? data.days : {} };
+      if (!raw) return emptyStore();
+      return normalizeStore(JSON.parse(raw));
     } catch {
-      return { version: 1, days: {} };
+      return emptyStore();
     }
   }
 
-  function saveStore(store) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  function saveStore(store, opts = {}) {
+    const next = normalizeStore(store);
+    if (!opts.keepUpdatedAt) next.updatedAt = nowISO();
+    // Omit empty days
+    Object.keys(next.days).forEach((k) => {
+      if (!Array.isArray(next.days[k]) || !next.days[k].length) delete next.days[k];
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    if (!opts.skipUpload) scheduleUpload();
+    return next;
   }
 
   function getDayMarkers(store, key) {
@@ -105,7 +138,94 @@
     } else {
       store.days[key] = markers;
     }
-    saveStore(store);
+    store = saveStore(store);
+    return store;
+  }
+
+  function markerTimestamp(m) {
+    if (!m) return 0;
+    const t = Date.parse(m.updatedAt || m.createdAt || 0);
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function pruneDeleted(deleted) {
+    const cutoff = Date.now() - DELETE_RETENTION_MS;
+    const out = {};
+    Object.keys(deleted || {}).forEach((id) => {
+      const t = Date.parse(deleted[id]);
+      if (Number.isFinite(t) && t >= cutoff) out[id] = deleted[id];
+    });
+    return out;
+  }
+
+  /**
+   * Merge two stores by marker id + tombstones.
+   * Same id → keep later updatedAt/createdAt.
+   * If deleted[ts] ≥ marker ts → drop marker.
+   */
+  function mergeStores(local, remote) {
+    const a = normalizeStore(local);
+    const b = normalizeStore(remote);
+
+    const deleted = {};
+    const allDel = new Set([
+      ...Object.keys(a.deleted || {}),
+      ...Object.keys(b.deleted || {})
+    ]);
+    allDel.forEach((id) => {
+      const ta = Date.parse((a.deleted || {})[id] || 0) || 0;
+      const tb = Date.parse((b.deleted || {})[id] || 0) || 0;
+      deleted[id] = ta >= tb ? a.deleted[id] : b.deleted[id];
+    });
+    const prunedDeleted = pruneDeleted(deleted);
+
+    /** @type {Record<string, { marker: Marker, day: string }>} */
+    const best = {};
+    function ingest(day, marker) {
+      if (!marker || !marker.id) return;
+      const prev = best[marker.id];
+      if (!prev || markerTimestamp(marker) >= markerTimestamp(prev.marker)) {
+        best[marker.id] = { marker, day };
+      }
+    }
+    Object.keys(a.days).forEach((day) => {
+      (a.days[day] || []).forEach((m) => ingest(day, m));
+    });
+    Object.keys(b.days).forEach((day) => {
+      (b.days[day] || []).forEach((m) => ingest(day, m));
+    });
+
+    const days = {};
+    Object.keys(best).forEach((id) => {
+      const { marker, day } = best[id];
+      const delTs = Date.parse(prunedDeleted[id] || 0);
+      if (Number.isFinite(delTs) && delTs >= markerTimestamp(marker)) return;
+      if (!days[day]) days[day] = [];
+      days[day].push(marker);
+    });
+
+    Object.keys(days).forEach((d) => {
+      days[d].sort((x, y) => (x.n || 0) - (y.n || 0));
+    });
+
+    const updatedAtA = Date.parse(a.updatedAt || 0) || 0;
+    const updatedAtB = Date.parse(b.updatedAt || 0) || 0;
+    const updatedAt = new Date(Math.max(updatedAtA, updatedAtB, Date.now())).toISOString();
+
+    return normalizeStore({ version: 1, updatedAt, days, deleted: prunedDeleted });
+  }
+
+  function storesEqualish(a, b) {
+    try {
+      return JSON.stringify(normalizeStore(a)) === JSON.stringify(normalizeStore(b));
+    } catch {
+      return false;
+    }
+  }
+
+  function localHasExtra(local, remote, merged) {
+    // Re-upload if local contributed anything beyond remote
+    return !storesEqualish(merged, remote);
   }
 
   function uid() {
@@ -149,7 +269,6 @@
     return Math.round(v * 20) / 20;
   }
 
-  /** Client point → normalized plot position (0..1, left→right/top→bottom). */
   function pointToNormalized(gridEl, clientX, clientY) {
     const rect = gridEl.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
@@ -159,7 +278,6 @@
     };
   }
 
-  /** Normalized plot position → grid coords (-3..+3), snapped lightly to 0.05. */
   function normalizedToXY(position) {
     return {
       x: snapCoord(position.x * (RANGE * 2) - RANGE),
@@ -167,7 +285,6 @@
     };
   }
 
-  /** Client point → grid coords (-3..+3), clamped to the plot bounds. */
   function pointToXY(gridEl, clientX, clientY) {
     const position = pointToNormalized(gridEl, clientX, clientY);
     return position ? normalizedToXY(position) : null;
@@ -179,6 +296,444 @@
     return { left, top };
   }
 
+  // ——— Google auth / Drive ———
+  let tokenClient = null;
+  let syncBusy = false;
+  let uploadTimer = null;
+  let uploadQueued = false;
+  /** @type {'idle'|'syncing'|'synced'|'signin'|'offline'|'error'} */
+  let syncState = 'idle';
+
+  function getClientId() {
+    return (localStorage.getItem(GGL_CLIENT_KEY) || '').trim();
+  }
+
+  function saveClientId(id) {
+    localStorage.setItem(GGL_CLIENT_KEY, id.trim());
+  }
+
+  function loadTok() {
+    try {
+      return JSON.parse(localStorage.getItem(GGL_TOK_KEY) || 'null');
+    } catch {
+      return null;
+    }
+  }
+
+  function saveTok(t) {
+    if (!t) localStorage.removeItem(GGL_TOK_KEY);
+    else localStorage.setItem(GGL_TOK_KEY, JSON.stringify(t));
+  }
+
+  function isSignedIn() {
+    const t = loadTok();
+    return !!(t && t.access_token);
+  }
+
+  function waitForGis(timeoutMs = 12000) {
+    return new Promise((resolve, reject) => {
+      if (window.google && google.accounts && google.accounts.oauth2) {
+        resolve();
+        return;
+      }
+      const start = Date.now();
+      const iv = setInterval(() => {
+        if (window.google && google.accounts && google.accounts.oauth2) {
+          clearInterval(iv);
+          resolve();
+        } else if (Date.now() - start > timeoutMs) {
+          clearInterval(iv);
+          reject(new Error('Google Sign-In script did not load'));
+        }
+      }, 50);
+    });
+  }
+
+  function ensureTokenClient() {
+    const clientId = getClientId();
+    if (!clientId) throw new Error('Enter the Google OAuth Client ID first');
+    if (!window.google || !google.accounts || !google.accounts.oauth2) {
+      throw new Error('Google Sign-In is still loading — try again');
+    }
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: DRIVE_SCOPE,
+      callback: () => {}
+    });
+    return tokenClient;
+  }
+
+  function requestAccessToken(prompt) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        await waitForGis();
+        ensureTokenClient();
+        tokenClient.callback = (resp) => {
+          if (resp.error) {
+            reject(new Error(resp.error));
+            return;
+          }
+          const exp = Date.now() + ((resp.expires_in || 3600) - 60) * 1000;
+          const prev = loadTok() || {};
+          const next = {
+            access_token: resp.access_token,
+            exp,
+            email: prev.email || null
+          };
+          saveTok(next);
+          resolve(next);
+        };
+        const opts = {};
+        if (prompt) opts.prompt = prompt;
+        else if (loadTok() && loadTok().access_token) opts.prompt = '';
+        tokenClient.requestAccessToken(opts);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  async function fetchUserEmail(accessToken) {
+    try {
+      const r = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+        headers: { Authorization: 'Bearer ' + accessToken }
+      });
+      if (!r.ok) return null;
+      const j = await r.json();
+      return j.email || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function getAccessToken() {
+    let t = loadTok();
+    if (t && t.access_token && Date.now() < t.exp) return t.access_token;
+    if (!getClientId()) return null;
+    if (!navigator.onLine) return null;
+    try {
+      t = await requestAccessToken('');
+      return t.access_token;
+    } catch {
+      return null;
+    }
+  }
+
+  async function driveFetch(path, options = {}) {
+    const token = await getAccessToken();
+    if (!token) throw new Error('Not signed in');
+    const headers = Object.assign({}, options.headers || {}, {
+      Authorization: 'Bearer ' + token
+    });
+    const r = await fetch('https://www.googleapis.com' + path, {
+      ...options,
+      headers
+    });
+    if (r.status === 401) {
+      // try one refresh
+      try {
+        await requestAccessToken('');
+      } catch {
+        saveTok(null);
+        throw new Error('Session expired — sign in again');
+      }
+      const token2 = await getAccessToken();
+      headers.Authorization = 'Bearer ' + token2;
+      const r2 = await fetch('https://www.googleapis.com' + path, {
+        ...options,
+        headers
+      });
+      if (!r2.ok) throw new Error('Drive ' + r2.status + ' ' + (await r2.text()));
+      return r2;
+    }
+    if (!r.ok) throw new Error('Drive ' + r.status + ' ' + (await r.text()));
+    return r;
+  }
+
+  async function findDriveFileId() {
+    const cached = localStorage.getItem(GGL_FILE_KEY);
+    if (cached) return cached;
+    const q = encodeURIComponent("name = '" + DRIVE_FILE_NAME + "'");
+    const r = await driveFetch(
+      '/drive/v3/files?spaces=appDataFolder&q=' + q + '&fields=files(id,name)&pageSize=10'
+    );
+    const j = await r.json();
+    if (j.files && j.files.length) {
+      localStorage.setItem(GGL_FILE_KEY, j.files[0].id);
+      return j.files[0].id;
+    }
+    return null;
+  }
+
+  async function createDriveFile(content) {
+    const metadata = {
+      name: DRIVE_FILE_NAME,
+      parents: ['appDataFolder']
+    };
+    const boundary = 'ans_orient_' + Date.now();
+    const body =
+      '--' + boundary + '\r\n' +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) + '\r\n' +
+      '--' + boundary + '\r\n' +
+      'Content-Type: application/json\r\n\r\n' +
+      content + '\r\n' +
+      '--' + boundary + '--';
+    const r = await driveFetch(
+      '/upload/drive/v3/files?uploadType=multipart&fields=id',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
+        body
+      }
+    );
+    const j = await r.json();
+    if (j.id) localStorage.setItem(GGL_FILE_KEY, j.id);
+    return j.id;
+  }
+
+  async function downloadDriveStore() {
+    let id = await findDriveFileId();
+    if (!id) return null;
+    try {
+      const r = await driveFetch('/drive/v3/files/' + encodeURIComponent(id) + '?alt=media');
+      const body = await r.text();
+      if (!body) return null;
+      try {
+        return normalizeStore(JSON.parse(body));
+      } catch {
+        return null;
+      }
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err);
+      if (msg.includes('404')) {
+        localStorage.removeItem(GGL_FILE_KEY);
+        id = await findDriveFileId();
+        if (!id) return null;
+        const r2 = await driveFetch('/drive/v3/files/' + encodeURIComponent(id) + '?alt=media');
+        const body2 = await r2.text();
+        if (!body2) return null;
+        try {
+          return normalizeStore(JSON.parse(body2));
+        } catch {
+          return null;
+        }
+      }
+      throw err;
+    }
+  }
+
+  async function uploadDriveStore(storeObj) {
+    const payload = JSON.stringify(normalizeStore(storeObj));
+    let id = await findDriveFileId();
+    if (!id) {
+      await createDriveFile(payload);
+      return;
+    }
+    try {
+      await driveFetch(
+        '/upload/drive/v3/files/' + encodeURIComponent(id) + '?uploadType=media',
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload
+        }
+      );
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err);
+      if (msg.includes('404')) {
+        localStorage.removeItem(GGL_FILE_KEY);
+        await createDriveFile(payload);
+        return;
+      }
+      throw err;
+    }
+  }
+
+  function setSyncStatus(state, detail) {
+    syncState = state;
+    const el = $('#sync-status');
+    if (!el) return;
+    const map = {
+      idle: 'Local only',
+      signin: 'Google · sign in',
+      syncing: 'Google · syncing…',
+      synced: 'Google · synced',
+      offline: 'Offline · local only',
+      error: detail ? 'Google · ' + detail : 'Google · error'
+    };
+    if (!navigator.onLine) {
+      el.textContent = map.offline;
+      return;
+    }
+    if (!isSignedIn() && state !== 'syncing') {
+      el.textContent = map.signin;
+      return;
+    }
+    el.textContent = map[state] || map.idle;
+  }
+
+  function updateSettingsUI(msg) {
+    const signedOut = $('#settings-signed-out');
+    const signedIn = $('#settings-signed-in');
+    const account = $('#settings-account');
+    const clientInput = $('#ggl-client-id');
+    const msgEl = $('#settings-msg');
+    if (clientInput && document.activeElement !== clientInput) {
+      clientInput.value = getClientId();
+    }
+    const on = isSignedIn();
+    if (signedOut) signedOut.hidden = on;
+    if (signedIn) signedIn.hidden = !on;
+    if (account) {
+      const t = loadTok();
+      account.textContent = t && t.email ? 'Signed in as ' + t.email : 'Signed in with Google';
+    }
+    if (msgEl && msg !== undefined) msgEl.textContent = msg || '';
+    setSyncStatus(on ? (syncState === 'synced' ? 'synced' : syncState) : 'signin');
+  }
+
+  function openSettings() {
+    const sheet = $('#settings-sheet');
+    if (!sheet) return;
+    updateSettingsUI('');
+    sheet.hidden = false;
+    requestAnimationFrame(() => sheet.classList.add('open'));
+  }
+
+  function closeSettings() {
+    const sheet = $('#settings-sheet');
+    if (!sheet) return;
+    sheet.classList.remove('open');
+    sheet.hidden = true;
+  }
+
+  async function signInWithGoogle() {
+    const input = $('#ggl-client-id');
+    const id = (input && input.value ? input.value : getClientId()).trim();
+    if (!id) {
+      updateSettingsUI('Enter the OAuth Client ID first.');
+      return;
+    }
+    saveClientId(id);
+    updateSettingsUI('Opening Google…');
+    try {
+      await waitForGis();
+      const tok = await requestAccessToken('consent');
+      const email = await fetchUserEmail(tok.access_token);
+      if (email) {
+        const t = loadTok() || tok;
+        t.email = email;
+        saveTok(t);
+      }
+      updateSettingsUI('Signed in.');
+      toast('Signed in with Google');
+      setSyncStatus('syncing');
+      await syncFromCloud({ reason: 'signin' });
+    } catch (err) {
+      updateSettingsUI('Sign-in failed: ' + (err && err.message ? err.message : 'error'));
+      setSyncStatus('error', 'sign-in failed');
+    }
+  }
+
+  function signOutGoogle() {
+    const t = loadTok();
+    const clientId = getClientId();
+    if (t && t.access_token && window.google && google.accounts && google.accounts.oauth2) {
+      try {
+        google.accounts.oauth2.revoke(t.access_token, () => {});
+      } catch { /* ignore */ }
+    }
+    saveTok(null);
+    localStorage.removeItem(GGL_FILE_KEY);
+    tokenClient = null;
+    void clientId;
+    updateSettingsUI('Signed out.');
+    setSyncStatus('signin');
+    toast('Signed out');
+  }
+
+  function scheduleUpload() {
+    uploadQueued = true;
+    if (uploadTimer) clearTimeout(uploadTimer);
+    uploadTimer = setTimeout(() => {
+      uploadTimer = null;
+      if (!uploadQueued) return;
+      uploadQueued = false;
+      pushLocalIfNeeded();
+    }, UPLOAD_DEBOUNCE_MS);
+  }
+
+  async function pushLocalIfNeeded() {
+    if (!isSignedIn() || !navigator.onLine) {
+      setSyncStatus(isSignedIn() ? 'offline' : 'signin');
+      return;
+    }
+    try {
+      setSyncStatus('syncing');
+      const local = loadStore();
+      await uploadDriveStore(local);
+      setSyncStatus('synced');
+    } catch (err) {
+      setSyncStatus('error', 'upload failed');
+      console.warn('upload failed', err);
+    }
+  }
+
+  async function syncFromCloud(opts = {}) {
+    if (syncBusy) return;
+    if (!isSignedIn()) {
+      setSyncStatus('signin');
+      if (opts.reason === 'manual') openSettings();
+      return;
+    }
+    if (!navigator.onLine) {
+      setSyncStatus('offline');
+      if (opts.reason === 'manual') toast('Offline — local only');
+      return;
+    }
+    syncBusy = true;
+    setSyncStatus('syncing');
+    try {
+      const localBefore = loadStore();
+      let remote = null;
+      try {
+        remote = await downloadDriveStore();
+      } catch (err) {
+        // missing file → seed
+        if (String(err.message || '').includes('404')) remote = null;
+        else throw err;
+      }
+      if (!remote) {
+        await uploadDriveStore(localBefore);
+        store = loadStore();
+        setSyncStatus('synced');
+        if (opts.reason === 'manual' || opts.reason === 'signin') toast('Cloud file created');
+        updateSettingsUI(opts.reason === 'manual' ? 'Synced — seeded cloud file.' : undefined);
+        return;
+      }
+      const merged = mergeStores(localBefore, remote);
+      const needUpload = localHasExtra(localBefore, remote, merged);
+      store = saveStore(merged, { keepUpdatedAt: true, skipUpload: true });
+      if (needUpload || !storesEqualish(merged, remote)) {
+        await uploadDriveStore(store);
+      }
+      renderMarkers();
+      setSyncStatus('synced');
+      if (opts.reason === 'manual') toast('Synced');
+      updateSettingsUI(opts.reason === 'manual' ? 'Synced with Google Drive.' : undefined);
+    } catch (err) {
+      console.warn('sync failed', err);
+      setSyncStatus('error', 'sync failed');
+      if (opts.reason === 'manual' || opts.reason === 'signin') {
+        updateSettingsUI('Sync failed: ' + (err && err.message ? err.message : 'error'));
+        toast('Sync failed');
+      }
+    } finally {
+      syncBusy = false;
+    }
+  }
+
   // ——— State ———
   let store = loadStore();
   let currentDay = dayKeyFromDate();
@@ -188,7 +743,6 @@
   let modalMode = null;
   /** @type {Marker|null} */
   let activeMarker = null;
-  /** Draft x/y while modal is open (create or edit). */
   let draftXY = null;
 
   const LONG_PRESS_MS = 500;
@@ -219,13 +773,10 @@
   const bandLabelsNeutral = $('#band-labels-neutral');
   const miniDot = $('#mini-dot');
   const dayViewSelect = $('#day-view');
-  const gridCard = document.querySelector('.grid-card');
-  const markerPanel = $('#marker-panel');
   const toastEl = $('#toast');
   const appVersionEl = $('#app-version');
   if (appVersionEl) appVersionEl.textContent = `v${APP_VERSION}`;
 
-  // Build axis labels & grid lines once
   function buildChrome() {
     const ticks = [-3, -2, -1, 0, 1, 2, 3];
     const top = $('#x-labels-top');
@@ -243,7 +794,6 @@
       b.textContent = label;
       bot.appendChild(b);
     });
-    // Y ticks top→bottom: +3..-3
     [...ticks].reverse().forEach((t) => {
       const s = document.createElement('span');
       s.textContent = t > 0 ? `+${t}` : String(t);
@@ -319,7 +869,6 @@
       markersEl.appendChild(btn);
     });
 
-    // Create-flow preview (unsaved)
     if (modalMode === 'create' && draftXY) {
       const { left, top } = xyToPercent(draftXY.x, draftXY.y);
       const preview = document.createElement('div');
@@ -332,7 +881,6 @@
       markersEl.appendChild(preview);
     }
 
-    // List
     markerList.innerHTML = '';
     if (!ms.length) {
       emptyState.hidden = false;
@@ -383,11 +931,8 @@
       .replace(/"/g, '&quot;');
   }
 
-  // ——— Sliders ↔ draft position ———
-  /** Cross-fade horizontal band zone titles with Sense of threat (chart Y −3…+3). */
   function updateBandLabelOpacity(y) {
     const yy = Number(y);
-    // Neutral peaks at center; fades toward ±1.2 (smooth mid-band visibility)
     const neutralOpacity = 1 - Math.min(1, Math.abs(yy) / 1.2);
     const optimalOpacity = yy > 0 ? clamp01(yy / RANGE) : 0;
     const defensiveOpacity = yy < 0 ? clamp01(-yy / RANGE) : 0;
@@ -396,7 +941,6 @@
     if (bandLabelsDefensive) bandLabelsDefensive.style.opacity = String(defensiveOpacity);
   }
 
-  /** Sync mini-chart draft marker with current draftXY. */
   function updateMiniDot() {
     if (!miniDot || !draftXY) return;
     const { left, top } = xyToPercent(draftXY.x, draftXY.y);
@@ -424,7 +968,6 @@
     const y = snapCoord(clampRange(Number(sliderThreat.value)));
     const x = snapCoord(clampRange(Number(sliderBand.value)));
     draftXY = { x, y };
-    // Keep slider values snapped
     sliderThreat.value = String(y);
     sliderBand.value = String(x);
     updateBandLabelOpacity(y);
@@ -447,7 +990,6 @@
         );
       }
     } else if (modalMode === 'create') {
-      // Re-render to move/create the preview ghost
       const preview = markersEl.querySelector('.marker.preview');
       if (preview) {
         const { left, top } = xyToPercent(draftXY.x, draftXY.y);
@@ -459,14 +1001,12 @@
     }
   }
 
-  // ——— Modal ———
   function openModal() {
     modal.hidden = false;
     requestAnimationFrame(() => modal.classList.add('open'));
   }
 
   function dismissModal() {
-    // X / Escape / backdrop: discard draft; do not save
     modal.classList.remove('open');
     modal.hidden = true;
     modalMode = null;
@@ -524,8 +1064,11 @@
       next = list.slice();
       next[idx] = marker;
     }
-    setDayMarkers(store, currentDay, next);
-    store = loadStore();
+    // Clear tombstone if re-creating same id (shouldn't happen) 
+    if (store.deleted && store.deleted[marker.id]) {
+      delete store.deleted[marker.id];
+    }
+    store = setDayMarkers(store, currentDay, next);
     return markerById(marker.id);
   }
 
@@ -569,7 +1112,6 @@
 
   function onDelete() {
     if (modalMode === 'create') {
-      // Unsaved create: discard
       dismissModal();
       toast('Discarded');
       return;
@@ -577,9 +1119,11 @@
     if (!activeMarker) return;
     if (!confirm(`Delete marker #${activeMarker.n}?`)) return;
     const n = activeMarker.n;
-    const list = markersForDay().filter((m) => m.id !== activeMarker.id);
-    setDayMarkers(store, currentDay, list);
-    store = loadStore();
+    const id = activeMarker.id;
+    const list = markersForDay().filter((m) => m.id !== id);
+    store.deleted = store.deleted || {};
+    store.deleted[id] = nowISO();
+    store = setDayMarkers(store, currentDay, list);
     toast(`Deleted marker #${n}`);
     closeModalQuick();
     activeMarker = null;
@@ -587,13 +1131,12 @@
   }
 
   function duplicateYAbove(y) {
-    const lift = DUP_OFFSET_NORM * (RANGE * 2); // ≈ 0.42
+    const lift = DUP_OFFSET_NORM * (RANGE * 2);
     return snapCoord(Math.min(RANGE, y + lift));
   }
 
   function onDuplicate() {
     if (!draftXY) return;
-    // Ensure the current marker exists (save create/edit draft first)
     const source = saveCurrent();
     if (!source) return;
 
@@ -607,11 +1150,9 @@
     };
     const saved = persistMarker(dup);
     toast(`Duplicated → #${saved.n}`);
-    // Stay in edit on the new duplicate
     openEdit(saved);
   }
 
-  // ——— Day switcher ———
   function setDay(key) {
     currentDay = key;
     dayPicker.value = key;
@@ -621,7 +1162,6 @@
     renderMarkers();
   }
 
-  // ——— Grid interaction ———
   function clearGridPress() {
     if (gridPressTimer !== null) {
       clearTimeout(gridPressTimer);
@@ -656,8 +1196,7 @@
     const list = getDayMarkers(store, currentDay).map((m) =>
       m.id === id ? { ...m, x: xy.x, y: xy.y, updatedAt: nowISO() } : m
     );
-    setDayMarkers(store, currentDay, list);
-    store = loadStore();
+    store = setDayMarkers(store, currentDay, list);
     const updated = markerById(id);
     if (activeMarker && activeMarker.id === id) {
       activeMarker = updated;
@@ -757,7 +1296,6 @@
   }
 
   function onGridPointerDown(e) {
-    // Markers handle their own taps and long-press moves.
     if (e.target.closest('.marker')) return;
     if (e.button !== undefined && e.button !== 0) return;
 
@@ -787,7 +1325,6 @@
     if (gridPress && gridPress.pointerId === e.pointerId) clearGridPress();
   }
 
-  // ——— Export / Import ———
   function exportJSON() {
     const payload = {
       app: 'ANS Orientation Tracker',
@@ -814,22 +1351,18 @@
         if (!data || typeof data !== 'object' || !data.days || typeof data.days !== 'object') {
           throw new Error('Invalid file: missing days');
         }
-        const incoming = data.days;
-        const keys = Object.keys(incoming);
-        if (!keys.length) {
+        const incoming = normalizeStore(data);
+        const keys = Object.keys(incoming.days);
+        if (!keys.length && !Object.keys(incoming.deleted || {}).length) {
           toast('No days in file');
           return;
         }
         const merge = confirm(
-          `Import ${keys.length} day(s)?\nOK = merge (replace overlapping days)\nCancel = abort`
+          `Import ${keys.length} day(s)?\nOK = merge with existing\nCancel = abort`
         );
         if (!merge) return;
-        store = loadStore();
-        keys.forEach((k) => {
-          if (Array.isArray(incoming[k])) store.days[k] = incoming[k];
-        });
-        saveStore(store);
-        store = loadStore();
+        store = mergeStores(loadStore(), incoming);
+        store = saveStore(store);
         renderMarkers();
         toast('Import complete');
       } catch (err) {
@@ -839,7 +1372,15 @@
     reader.readAsText(file);
   }
 
-  // ——— Wire events ———
+  function onSyncButton() {
+    if (!isSignedIn()) {
+      openSettings();
+      return;
+    }
+    // Signed in: open settings (Sync now + Sign out) — also allow quick sync via long path
+    openSettings();
+  }
+
   function bind() {
     grid.addEventListener('pointerdown', onGridPointerDown);
     grid.addEventListener('pointermove', onGridPointerMove);
@@ -873,7 +1414,10 @@
     });
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !modal.hidden) dismissModal();
+      if (e.key === 'Escape') {
+        if (!$('#settings-sheet').hidden) closeSettings();
+        else if (!modal.hidden) dismissModal();
+      }
     });
 
     $('#btn-export').addEventListener('click', exportJSON);
@@ -883,16 +1427,42 @@
       if (f) importJSON(f);
       e.target.value = '';
     });
+
+    const btnSync = $('#btn-sync');
+    if (btnSync) btnSync.addEventListener('click', onSyncButton);
+    const btnSettingsClose = $('#btn-settings-close');
+    if (btnSettingsClose) btnSettingsClose.addEventListener('click', closeSettings);
+    const settingsSheet = $('#settings-sheet');
+    if (settingsSheet) {
+      settingsSheet.addEventListener('click', (e) => {
+        if (e.target === settingsSheet) closeSettings();
+      });
+    }
+    const btnSignIn = $('#btn-google-signin');
+    if (btnSignIn) btnSignIn.addEventListener('click', () => signInWithGoogle());
+    const btnSignOut = $('#btn-google-signout');
+    if (btnSignOut) btnSignOut.addEventListener('click', () => signOutGoogle());
+    const btnSyncNow = $('#btn-sync-now');
+    if (btnSyncNow) btnSyncNow.addEventListener('click', () => syncFromCloud({ reason: 'manual' }));
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        syncFromCloud({ reason: 'visibility' });
+      }
+    });
+    window.addEventListener('online', () => {
+      setSyncStatus(isSignedIn() ? 'syncing' : 'signin');
+      if (uploadQueued || isSignedIn()) {
+        syncFromCloud({ reason: 'online' });
+      }
+    });
+    window.addEventListener('offline', () => setSyncStatus('offline'));
   }
 
-  // ——— Service worker ———
   function registerSW() {
     if (!('serviceWorker' in navigator)) return;
-    // Only register when served over http(s) — file:// won't work
     if (!/^https?:$/.test(location.protocol)) return;
 
-    // skipWaiting() + clients.claim() in sw.js makes updates take control now;
-    // reload once for the new cached HTML/JS/CSS to become visible.
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       if (reloading) return;
@@ -903,9 +1473,7 @@
 
     navigator.serviceWorker.register('./sw.js')
       .then((registration) => registration.update())
-      .catch(() => {
-        /* offline / first load may fail quietly */
-      });
+      .catch(() => {});
   }
 
   // ——— Init ———
@@ -916,4 +1484,10 @@
   applyDayView(dayView);
   renderMarkers();
   registerSW();
+  setSyncStatus(isSignedIn() ? 'synced' : 'signin');
+  updateSettingsUI();
+  // Background sync on load
+  if (isSignedIn() && navigator.onLine) {
+    syncFromCloud({ reason: 'load' });
+  }
 })();

@@ -1,18 +1,18 @@
 # ANS Orientation Tracker
 
-A polished single-page Progressive Web App for **Cal Harris Jr.** to track daily Autonomic Nervous System (ANS) orientation on a −3…+3 grid.
+A polished single-page Progressive Web App for tracking daily Autonomic Nervous System (ANS) orientation on a −3…+3 grid. Built for **Cal Harris Jr.**; any user can install it and sync across their own devices.
 
 - **X axis:** left = inner functions (−), right = outer actions (+)
 - **Y axis:** top = sense of safety (+), bottom = sense of threat (−), center = neutral
 - **Optimal Zone (yellow, y > 0):** Nourished · Connected · Energized
 - **Defensive Zone (red, y < 0):** Drained · Stuck · Agitated
 
-Markers are numbered per calendar day, stored in `localStorage`, and work offline after the first visit.
+Markers are numbered per calendar day, cached in `localStorage`, and optionally synced to **each user’s own Google Drive app data** (hidden `appDataFolder`). The app works offline after the first visit.
 
 ## Files
 
 ```
-ans-orientation-pwa/
+ans-orientation-tracker/
 ├── index.html
 ├── css/styles.css
 ├── js/app.js
@@ -43,6 +43,7 @@ npx --yes serve -l 8080
 Then open **http://localhost:8080** (or the address your server prints).
 
 > Service workers and “Add to Home Screen” require `http://` or `https://` — not `file://`.
+> Google Sign-In also requires an authorized JavaScript origin (see Data / Sync below).
 
 ## Install (Add to Home Screen)
 
@@ -66,19 +67,50 @@ Then open **http://localhost:8080** (or the address your server prints).
 ## How to use
 
 1. Use **‹ ›** or the **date picker** to choose a day (each day has its own markers).
-2. **Long-press an empty spot** on the grid → enter an optional note → **Save marker**.
-3. **Tap an existing marker** (or a row in “Markers today”) → view note & timestamp → **Edit** or **Delete**.
+2. **Long-press an empty spot** on the grid → enter an optional note → **Save**.
+3. **Tap an existing marker** (or a row in “Markers today”) → view note & timestamp → edit, move (long-press), duplicate, or delete.
 4. **Export** downloads a JSON backup; **Import** merges days from a previously exported file.
+5. **Sync** (cloud icon) opens settings to connect Google Drive for cross-device sync.
 
 Timestamps are stored as ISO-8601 UTC and shown in **America/Los_Angeles** (PT).
 
-## Data
+## Data & multi-user sync (Google Drive)
 
-- Storage key: `ans-orientation-tracker:v1` in the browser’s `localStorage`
-- Nothing is uploaded; data stays on the device
-- Clearing site data / uninstalling may wipe markers — use **Export** for backups
+- **Local cache key:** `ans-orientation-tracker:v1` in the browser’s `localStorage`
+- Offline use always works on the device; clearing site data may wipe the local cache — use **Export** or keep Google sync on.
+- **Per-user cloud file:** when signed in, markers sync to a private file `ans-orientation.json` in that user’s Google Drive **appDataFolder** (not visible in the normal Drive UI). Each Google account gets its own file; accounts do not share data.
+- **Merge rules:** markers are keyed by `id`. For the same id, the later `updatedAt` / `createdAt` wins. Deletes write a tombstone (`deleted[id] = ISO`); a tombstone at or after the marker’s timestamp drops it. Tombstones older than 180 days are pruned on sync. Day keys are unioned; empty days are omitted.
+- **When sync runs:** on app load, when the tab becomes visible, when the device comes back online, after local saves (debounced ~800ms upload), and via **Sync now** in settings.
+
+### Connect Google (any user)
+
+1. Open **Sync** in the header.
+2. Enter the project **Google OAuth Client ID** (Web application client shared by the project).
+3. Tap **Sign in with Google** and approve Drive app data access.
+4. Markers then sync across that user’s phones/Macs while signed in to the same Google account.
+
+### Google Cloud setup (project owner / Cal)
+
+Create one OAuth 2.0 **Web application** client in Google Cloud Console for this PWA:
+
+1. APIs & Services → enable **Google Drive API**.
+2. Create OAuth client ID type **Web application**.
+3. **Authorized JavaScript origins:**
+   - `https://chi-65.github.io`
+   - (optional for local testing) `http://localhost:8080`
+4. Scopes used by the app (requested at sign-in):
+   - `https://www.googleapis.com/auth/drive.appdata`
+   - `https://www.googleapis.com/auth/userinfo.email` (account label in settings)
+5. Share the Client ID with users (they paste it once in Sync settings). No client secret is embedded in the app — GIS token client runs in the browser.
+6. OAuth consent screen: add test users while in Testing, or publish the app when ready for broader use.
+
+Users do **not** need their own Cloud project if they use the shared project Client ID; each person still signs into **their own** Google account and only sees their own appData file.
 
 ## Theme
 
 - Theme color: `#8c1428` (defensive / burgundy accent)
 - Background: warm paper `#f7f4ef`
+
+## Version
+
+Current app version: **1.9** (service worker cache `ans-orientation-v9`).

@@ -27,6 +27,9 @@
         </div>
       </div>
       <div class="header-actions">
+        <button type="button" class="btn btn-ghost" id="btn-sync" title="Sync / Google Drive">
+          ☁ <span class="label">Sync</span>
+        </button>
         <button type="button" class="btn btn-ghost" id="btn-export" title="Export JSON">
           ⬆ <span class="label">Export</span>
         </button>
@@ -122,7 +125,7 @@
       <div class="empty-state" id="empty-state">No markers yet. Long-press the grid to begin.</div>
     </section>
 
-    <footer class="credits">Data stays on this device · America/Los_Angeles · Offline-ready PWA · <span class="app-version" id="app-version">v—</span></footer>
+    <footer class="credits"><span id="sync-status">Local only</span> · America/Los_Angeles · Offline-ready PWA · <span class="app-version" id="app-version">v—</span></footer>
   </div>
 
   <!-- Edit / create modal -->
@@ -245,8 +248,39 @@
     </div>
   </div>
 
+  <!-- Sync / Google settings sheet -->
+  <div class="modal-backdrop" id="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+    <div class="modal settings-modal">
+      <button type="button" class="modal-close" id="btn-settings-close" aria-label="Close settings">×</button>
+      <h3 id="settings-title">Sync</h3>
+      <p class="sub" id="settings-sub">Sign in with Google to sync markers across your devices via your private Drive app data.</p>
+
+      <div id="settings-signed-out">
+        <div class="field">
+          <label for="ggl-client-id">Google OAuth Client ID</label>
+          <input type="text" id="ggl-client-id" class="text-input" placeholder="xxxx.apps.googleusercontent.com" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" />
+        </div>
+        <p class="settings-hint">Use the project Web client. Authorized JavaScript origin: <code>https://chi-65.github.io</code></p>
+        <div class="modal-actions settings-actions">
+          <button type="button" class="btn btn-primary" id="btn-google-signin">Sign in with Google</button>
+        </div>
+      </div>
+
+      <div id="settings-signed-in" hidden>
+        <p class="settings-account" id="settings-account">Signed in</p>
+        <div class="modal-actions settings-actions">
+          <button type="button" class="btn btn-primary" id="btn-sync-now">Sync now</button>
+          <button type="button" class="btn btn-ghost" id="btn-google-signout">Sign out</button>
+        </div>
+      </div>
+
+      <p class="settings-msg" id="settings-msg" role="status"></p>
+    </div>
+  </div>
+
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="js/app.js" defer></script>
 </body>
 </html>
