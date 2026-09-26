@@ -66,7 +66,7 @@ Then open **http://localhost:8080** (or the address your server prints).
 ## How to use
 
 1. Use **‹ ›** or the **date picker** to choose a day (each day has its own markers).
-2. **Tap an empty spot** on the grid → enter an optional note → **Save marker**.
+2. **Long-press an empty spot** on the grid → enter an optional note → **Save marker**.
 3. **Tap an existing marker** (or a row in “Markers today”) → view note & timestamp → **Edit** or **Delete**.
 4. **Export** downloads a JSON backup; **Import** merges days from a previously exported file.
 

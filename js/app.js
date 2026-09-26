@@ -140,6 +140,11 @@
   /** Pending create coords */
   let pendingXY = null;
 
+  const LONG_PRESS_MS = 500;
+  const LONG_PRESS_MOVE_TOLERANCE = 10;
+  let gridPress = null;
+  let gridPressTimer = null;
+
   // ——— DOM ———
   const grid = $('#grid');
   const markersEl = $('#markers');
@@ -419,12 +424,43 @@
   }
 
   // ——— Grid interaction ———
-  function onGridPointer(e) {
-    // Ignore if clicking a marker (they stopPropagation)
+  function clearGridPress() {
+    if (gridPressTimer !== null) {
+      clearTimeout(gridPressTimer);
+      gridPressTimer = null;
+    }
+    gridPress = null;
+  }
+
+  function onGridPointerDown(e) {
+    // Markers handle their own short taps; never start placement on top of one.
     if (e.target.closest('.marker')) return;
+    if (e.button !== undefined && e.button !== 0) return;
+
     const xy = pointToXY(grid, e.clientX, e.clientY);
     if (!xy) return;
-    openCreate(xy.x, xy.y);
+
+    clearGridPress();
+    gridPress = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, xy };
+    gridPressTimer = setTimeout(() => {
+      if (!gridPress || gridPress.pointerId !== e.pointerId) return;
+      gridPressTimer = null;
+      openCreate(gridPress.xy.x, gridPress.xy.y);
+    }, LONG_PRESS_MS);
+  }
+
+  function onGridPointerMove(e) {
+    if (!gridPress || gridPress.pointerId !== e.pointerId) return;
+    const moved = Math.hypot(e.clientX - gridPress.startX, e.clientY - gridPress.startY);
+    if (moved > LONG_PRESS_MOVE_TOLERANCE) clearGridPress();
+  }
+
+  function onGridPointerUp(e) {
+    if (gridPress && gridPress.pointerId === e.pointerId) clearGridPress();
+  }
+
+  function onGridPointerCancel(e) {
+    if (gridPress && gridPress.pointerId === e.pointerId) clearGridPress();
   }
 
   // ——— Export / Import ———
@@ -482,7 +518,12 @@
 
   // ——— Wire events ———
   function bind() {
-    grid.addEventListener('click', onGridPointer);
+    grid.addEventListener('pointerdown', onGridPointerDown);
+    grid.addEventListener('pointermove', onGridPointerMove);
+    grid.addEventListener('pointerup', onGridPointerUp);
+    grid.addEventListener('pointercancel', onGridPointerCancel);
+    grid.addEventListener('pointerleave', clearGridPress);
+    grid.addEventListener('contextmenu', (e) => e.preventDefault());
 
     $('#btn-prev').addEventListener('click', () => setDay(shiftDayKey(currentDay, -1)));
     $('#btn-next').addEventListener('click', () => setDay(shiftDayKey(currentDay, 1)));
