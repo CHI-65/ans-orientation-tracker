@@ -1,5 +1,5 @@
 /* ANS Orientation Tracker — service worker (offline cache) */
-const CACHE = 'ans-orientation-v3';
+const CACHE = 'ans-orientation-v4';
 const ASSETS = [
   './',
   './index.html',
