@@ -39,6 +39,13 @@
 
     <div class="day-bar" role="group" aria-label="Day switcher">
       <button type="button" class="day-nav" id="btn-prev" aria-label="Previous day">‹</button>
+      <label class="day-view-wrap" for="day-view">
+        <span class="sr-only">Day view</span>
+        <select id="day-view" class="day-view" aria-label="Chart or list view">
+          <option value="chart">Chart</option>
+          <option value="list">List</option>
+        </select>
+      </label>
       <div class="day-center">
         <div class="day-label">Selected day</div>
         <input type="date" class="day-date" id="day-picker" aria-label="Pick a date" />
@@ -65,7 +72,7 @@
           <div class="lines" id="grid-lines" aria-hidden="true"></div>
           <div class="zone-labels" aria-hidden="true">
             <div class="zone optimal col-l">
-              <span class="name">Dorsal/Ventral Blend</span>
+              <span class="name"><span class="name-line">Dorsal</span><span class="name-line">Ventral Blend</span></span>
               <span class="mood">“Nourished”</span>
             </div>
             <div class="zone optimal col-c">
@@ -73,7 +80,7 @@
               <span class="mood">“Connected”</span>
             </div>
             <div class="zone optimal col-r">
-              <span class="name">Sympathetic/Ventral Blend</span>
+              <span class="name"><span class="name-line">Sympathetic</span><span class="name-line">Ventral Blend</span></span>
               <span class="mood">“Energized”</span>
             </div>
             <div class="zone defensive col-l">
@@ -81,7 +88,7 @@
               <span class="mood">“Drained”</span>
             </div>
             <div class="zone defensive col-c">
-              <span class="name">Sympathetic/Dorsal Blend</span>
+              <span class="name"><span class="name-line">Sympathetic</span><span class="name-line">Dorsal Blend</span></span>
               <span class="mood">“Stuck”</span>
             </div>
             <div class="zone defensive col-r">
@@ -109,8 +116,8 @@
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Markers today</h2>
+    <section class="panel" id="marker-panel">
+      <h2 id="marker-panel-title">Markers today</h2>
       <ul class="marker-list" id="marker-list"></ul>
       <div class="empty-state" id="empty-state">No markers yet. Long-press the grid to begin.</div>
     </section>
@@ -156,34 +163,61 @@
           </div>
         </div>
 
+        <div class="mini-chart-wrap" aria-hidden="true">
+          <div class="mini-chart" id="mini-chart" title="Live placement preview">
+            <div class="mini-chart-plot">
+              <div class="mini-chart-lines" aria-hidden="true">
+                <div class="mini-hline axis"></div>
+                <div class="mini-vline axis"></div>
+              </div>
+              <div class="mini-dot" id="mini-dot"></div>
+            </div>
+            <div class="mini-chart-axes">
+              <span class="mini-y-top">+3</span>
+              <span class="mini-y-bot">−3</span>
+              <span class="mini-x-left">−3</span>
+              <span class="mini-x-right">+3</span>
+            </div>
+          </div>
+          <div class="mini-chart-caption">Live spot</div>
+        </div>
+
         <div class="field placement-band">
           <label for="slider-band">Horizontal band</label>
           <div class="band-labels" aria-hidden="true">
+            <div class="band-label-layer band-labels-neutral" id="band-labels-neutral">
+              <div class="band-col band-col-l"></div>
+              <div class="band-col band-col-c">
+                <span class="band-name">Neutral</span>
+                <span class="band-mood">center</span>
+              </div>
+              <div class="band-col band-col-r"></div>
+            </div>
             <div class="band-label-layer band-labels-optimal" id="band-labels-optimal">
               <div class="band-col band-col-l">
-                <span class="band-name">Dorsal/Ventral Blend</span>
+                <span class="band-name"><span class="bn-l1">Dorsal</span><span class="bn-l2">Ventral Blend</span></span>
                 <span class="band-mood">“Nourished”</span>
               </div>
               <div class="band-col band-col-c">
-                <span class="band-name">Ventral Vagal Dominant</span>
+                <span class="band-name"><span class="bn-l1">Ventral Vagal</span><span class="bn-l2">Dominant</span></span>
                 <span class="band-mood">“Connected”</span>
               </div>
               <div class="band-col band-col-r">
-                <span class="band-name">Sympathetic/Ventral Blend</span>
+                <span class="band-name"><span class="bn-l1">Sympathetic</span><span class="bn-l2">Ventral Blend</span></span>
                 <span class="band-mood">“Energized”</span>
               </div>
             </div>
             <div class="band-label-layer band-labels-defensive" id="band-labels-defensive">
               <div class="band-col band-col-l">
-                <span class="band-name">Dorsal Vagal Dominant</span>
+                <span class="band-name"><span class="bn-l1">Dorsal Vagal</span><span class="bn-l2">Dominant</span></span>
                 <span class="band-mood">“Drained”</span>
               </div>
               <div class="band-col band-col-c">
-                <span class="band-name">Sympathetic/Dorsal Blend</span>
+                <span class="band-name"><span class="bn-l1">Sympathetic</span><span class="bn-l2">Dorsal Blend</span></span>
                 <span class="band-mood">“Stuck”</span>
               </div>
               <div class="band-col band-col-r">
-                <span class="band-name">Sympathetic Dominant</span>
+                <span class="band-name"><span class="bn-l1">Sympathetic</span><span class="bn-l2">Dominant</span></span>
                 <span class="band-mood">“Agitated”</span>
               </div>
             </div>

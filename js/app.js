@@ -5,8 +5,9 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.7';
+  const APP_VERSION = '1.8';
   const STORAGE_KEY = 'ans-orientation-tracker:v1';
+  const VIEW_KEY = 'ans-orientation-tracker:dayView';
   const TZ = 'America/Los_Angeles';
   const RANGE = 3; // axes -3..+3
   /** Normalized-plot offset (~0.07) → grid-y lift for Duplicate. */
@@ -112,6 +113,29 @@
     return 'm-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9);
   }
 
+  function loadDayView() {
+    try {
+      const v = localStorage.getItem(VIEW_KEY);
+      return v === 'list' ? 'list' : 'chart';
+    } catch {
+      return 'chart';
+    }
+  }
+
+  function applyDayView(view) {
+    dayView = view === 'list' ? 'list' : 'chart';
+    try { localStorage.setItem(VIEW_KEY, dayView); } catch { /* private mode */ }
+    document.documentElement.classList.toggle('view-list', dayView === 'list');
+    document.body.classList.toggle('view-list', dayView === 'list');
+    const appEl = document.querySelector('.app');
+    if (appEl) appEl.classList.toggle('view-list', dayView === 'list');
+    if (dayViewSelect) dayViewSelect.value = dayView;
+    const title = $('#marker-panel-title');
+    if (title) {
+      title.textContent = dayView === 'list' ? 'Markers (list)' : 'Markers today';
+    }
+  }
+
   // ——— Coordinate mapping ———
   function clamp01(value) {
     return Math.max(0, Math.min(1, value));
@@ -158,6 +182,8 @@
   // ——— State ———
   let store = loadStore();
   let currentDay = dayKeyFromDate();
+  /** @type {'chart'|'list'} */
+  let dayView = 'chart';
   /** @type {'create'|'edit'|null} */
   let modalMode = null;
   /** @type {Marker|null} */
@@ -190,6 +216,11 @@
   const sliderBand = $('#slider-band');
   const bandLabelsOptimal = $('#band-labels-optimal');
   const bandLabelsDefensive = $('#band-labels-defensive');
+  const bandLabelsNeutral = $('#band-labels-neutral');
+  const miniDot = $('#mini-dot');
+  const dayViewSelect = $('#day-view');
+  const gridCard = document.querySelector('.grid-card');
+  const markerPanel = $('#marker-panel');
   const toastEl = $('#toast');
   const appVersionEl = $('#app-version');
   if (appVersionEl) appVersionEl.textContent = `v${APP_VERSION}`;
@@ -356,10 +387,21 @@
   /** Cross-fade horizontal band zone titles with Sense of threat (chart Y −3…+3). */
   function updateBandLabelOpacity(y) {
     const yy = Number(y);
+    // Neutral peaks at center; fades toward ±1.2 (smooth mid-band visibility)
+    const neutralOpacity = 1 - Math.min(1, Math.abs(yy) / 1.2);
     const optimalOpacity = yy > 0 ? clamp01(yy / RANGE) : 0;
     const defensiveOpacity = yy < 0 ? clamp01(-yy / RANGE) : 0;
+    if (bandLabelsNeutral) bandLabelsNeutral.style.opacity = String(neutralOpacity);
     if (bandLabelsOptimal) bandLabelsOptimal.style.opacity = String(optimalOpacity);
     if (bandLabelsDefensive) bandLabelsDefensive.style.opacity = String(defensiveOpacity);
+  }
+
+  /** Sync mini-chart draft marker with current draftXY. */
+  function updateMiniDot() {
+    if (!miniDot || !draftXY) return;
+    const { left, top } = xyToPercent(draftXY.x, draftXY.y);
+    miniDot.style.left = left + '%';
+    miniDot.style.top = top + '%';
   }
 
   function syncSlidersFromDraft() {
@@ -367,6 +409,7 @@
     sliderThreat.value = String(draftXY.y);
     sliderBand.value = String(draftXY.x);
     updateBandLabelOpacity(draftXY.y);
+    updateMiniDot();
   }
 
   function updateModalSub() {
@@ -386,6 +429,7 @@
     sliderBand.value = String(x);
     updateBandLabelOpacity(y);
     updateModalSub();
+    updateMiniDot();
     livePreviewPosition();
   }
 
@@ -810,6 +854,12 @@
       if (dayPicker.value) setDay(dayPicker.value);
     });
 
+    if (dayViewSelect) {
+      dayViewSelect.addEventListener('change', () => {
+        applyDayView(dayViewSelect.value);
+      });
+    }
+
     $('#btn-modal-close').addEventListener('click', dismissModal);
     $('#btn-save').addEventListener('click', onSave);
     $('#btn-delete').addEventListener('click', onDelete);
@@ -862,6 +912,8 @@
   buildChrome();
   bind();
   dayPicker.value = currentDay;
+  dayView = loadDayView();
+  applyDayView(dayView);
   renderMarkers();
   registerSW();
 })();
