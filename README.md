@@ -85,9 +85,8 @@ Timestamps are stored as ISO-8601 UTC and shown in **America/Los_Angeles** (PT).
 ### Connect Google (any user)
 
 1. Tap the large **Sign in with Google to sync** button near the top (or the footer **Google · sign in** link, or header **Sync**).
-2. Enter the project **Google OAuth Client ID** (Web application client shared by the project) the first time.
-3. Tap **Sign in with Google** and approve Drive app data access.
-4. Markers then sync across that user’s phones/Macs while signed in to the same Google account.
+2. Tap **Sign in with Google** and approve Drive app data access. The project OAuth Client ID is built into the app; Sync settings can optionally override it.
+3. Markers then sync across that user’s phones/Macs while signed in to the same Google account.
 
 ### Google Cloud setup (project owner / Cal)
 
@@ -101,7 +100,7 @@ Create one OAuth 2.0 **Web application** client in Google Cloud Console for this
 4. Scopes used by the app (requested at sign-in):
    - `https://www.googleapis.com/auth/drive.appdata`
    - `https://www.googleapis.com/auth/userinfo.email` (account label in settings)
-5. Share the Client ID with users (they paste it once in Sync settings). No client secret is embedded in the app — GIS token client runs in the browser.
+5. The Client ID is baked into the published app as the default (optional override in Sync settings). No client secret is embedded — GIS token client runs in the browser.
 6. OAuth consent screen: add test users while in Testing, or publish the app when ready for broader use.
 
 Users do **not** need their own Cloud project if they use the shared project Client ID; each person still signs into **their own** Google account and only sees their own appData file.
@@ -113,4 +112,4 @@ Users do **not** need their own Cloud project if they use the shared project Cli
 
 ## Version
 
-Current app version: **1.10** (service worker cache `ans-orientation-v10`).
+Current app version: **1.11** (service worker cache `ans-orientation-v11`).

@@ -5,10 +5,12 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.10';
+  const APP_VERSION = '1.11';
   const STORAGE_KEY = 'ans-orientation-tracker:v1';
   const VIEW_KEY = 'ans-orientation-tracker:dayView';
   const GGL_CLIENT_KEY = 'ans_ggl_client_id';
+  /** Public OAuth Web client ID (no secret). Settings field can override via localStorage. */
+  const DEFAULT_GGL_CLIENT_ID = '946780131587-apa99npvpgvoqmf746ob2s88pof10kf8.apps.googleusercontent.com';
   const GGL_TOK_KEY = 'ans_ggl_tok';
   const GGL_FILE_KEY = 'ans_ggl_file_id';
   const DRIVE_FILE_NAME = 'ans-orientation.json';
@@ -305,7 +307,8 @@
   let syncState = 'idle';
 
   function getClientId() {
-    return (localStorage.getItem(GGL_CLIENT_KEY) || '').trim();
+    const stored = (localStorage.getItem(GGL_CLIENT_KEY) || '').trim();
+    return stored || DEFAULT_GGL_CLIENT_ID;
   }
 
   function saveClientId(id) {
