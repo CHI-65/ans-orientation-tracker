@@ -84,8 +84,8 @@ Timestamps are stored as ISO-8601 UTC and shown in **America/Los_Angeles** (PT).
 
 ### Connect Google (any user)
 
-1. Open **Sync** in the header.
-2. Enter the project **Google OAuth Client ID** (Web application client shared by the project).
+1. Tap the large **Sign in with Google to sync** button near the top (or the footer **Google · sign in** link, or header **Sync**).
+2. Enter the project **Google OAuth Client ID** (Web application client shared by the project) the first time.
 3. Tap **Sign in with Google** and approve Drive app data access.
 4. Markers then sync across that user’s phones/Macs while signed in to the same Google account.
 
@@ -113,4 +113,4 @@ Users do **not** need their own Cloud project if they use the shared project Cli
 
 ## Version
 
-Current app version: **1.9** (service worker cache `ans-orientation-v9`).
+Current app version: **1.10** (service worker cache `ans-orientation-v10`).

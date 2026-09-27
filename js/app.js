@@ -5,7 +5,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.9';
+  const APP_VERSION = '1.10';
   const STORAGE_KEY = 'ans-orientation-tracker:v1';
   const VIEW_KEY = 'ans-orientation-tracker:dayView';
   const GGL_CLIENT_KEY = 'ans_ggl_client_id';
@@ -550,10 +550,15 @@
     }
   }
 
+  function refreshSignInBanner() {
+    const banner = $('#google-signin-banner');
+    if (!banner) return;
+    banner.hidden = isSignedIn();
+  }
+
   function setSyncStatus(state, detail) {
     syncState = state;
     const el = $('#sync-status');
-    if (!el) return;
     const map = {
       idle: 'Local only',
       signin: 'Google · sign in',
@@ -562,15 +567,17 @@
       offline: 'Offline · local only',
       error: detail ? 'Google · ' + detail : 'Google · error'
     };
-    if (!navigator.onLine) {
-      el.textContent = map.offline;
-      return;
+    let label;
+    if (!navigator.onLine) label = map.offline;
+    else if (!isSignedIn() && state !== 'syncing') label = map.signin;
+    else label = map[state] || map.idle;
+    if (el) {
+      el.textContent = label;
+      const clickable = !isSignedIn() || state === 'signin' || state === 'error';
+      el.classList.toggle('is-action', clickable);
+      el.title = clickable ? 'Open Google sync' : (isSignedIn() ? 'Signed in — tap Sync for options' : label);
     }
-    if (!isSignedIn() && state !== 'syncing') {
-      el.textContent = map.signin;
-      return;
-    }
-    el.textContent = map[state] || map.idle;
+    refreshSignInBanner();
   }
 
   function updateSettingsUI(msg) {
@@ -591,6 +598,7 @@
     }
     if (msgEl && msg !== undefined) msgEl.textContent = msg || '';
     setSyncStatus(on ? (syncState === 'synced' ? 'synced' : syncState) : 'signin');
+    refreshSignInBanner();
   }
 
   function openSettings() {
@@ -608,14 +616,32 @@
     sheet.hidden = true;
   }
 
+  function promptForClientId(msg) {
+    openSettings();
+    const input = $('#ggl-client-id');
+    updateSettingsUI(msg || 'Paste the Google OAuth Client ID, then tap Sign in with Google.');
+    if (input) {
+      requestAnimationFrame(() => {
+        input.focus();
+        input.select();
+      });
+    }
+  }
+
   async function signInWithGoogle() {
     const input = $('#ggl-client-id');
     const id = (input && input.value ? input.value : getClientId()).trim();
     if (!id) {
-      updateSettingsUI('Enter the OAuth Client ID first.');
+      promptForClientId('Enter the OAuth Client ID first (Google Cloud Console → Web client).');
       return;
     }
     saveClientId(id);
+    // Ensure settings sheet can show progress even if launched from the top banner
+    const sheet = $('#settings-sheet');
+    if (sheet && sheet.hidden) {
+      sheet.hidden = false;
+      requestAnimationFrame(() => sheet.classList.add('open'));
+    }
     updateSettingsUI('Opening Google…');
     try {
       await waitForGis();
@@ -629,8 +655,10 @@
       updateSettingsUI('Signed in.');
       toast('Signed in with Google');
       setSyncStatus('syncing');
+      refreshSignInBanner();
       await syncFromCloud({ reason: 'signin' });
     } catch (err) {
+      openSettings();
       updateSettingsUI('Sign-in failed: ' + (err && err.message ? err.message : 'error'));
       setSyncStatus('error', 'sign-in failed');
     }
@@ -1440,6 +1468,13 @@
     }
     const btnSignIn = $('#btn-google-signin');
     if (btnSignIn) btnSignIn.addEventListener('click', () => signInWithGoogle());
+    const btnSignInTop = $('#btn-google-signin-top');
+    if (btnSignInTop) btnSignInTop.addEventListener('click', () => signInWithGoogle());
+    const syncStatusBtn = $('#sync-status');
+    if (syncStatusBtn) syncStatusBtn.addEventListener('click', () => {
+      if (isSignedIn()) onSyncButton();
+      else signInWithGoogle();
+    });
     const btnSignOut = $('#btn-google-signout');
     if (btnSignOut) btnSignOut.addEventListener('click', () => signOutGoogle());
     const btnSyncNow = $('#btn-sync-now');
@@ -1486,6 +1521,7 @@
   registerSW();
   setSyncStatus(isSignedIn() ? 'synced' : 'signin');
   updateSettingsUI();
+  refreshSignInBanner();
   // Background sync on load
   if (isSignedIn() && navigator.onLine) {
     syncFromCloud({ reason: 'load' });
